@@ -908,7 +908,23 @@ namespace MolexUtility
         [MESTemplateKeywords("CD")]
         CD,
         [MESTemplateKeywords("Shift_BP")]
-        Shift_BP
+        Shift_BP,
+        [MESTemplateKeywords("RL")]
+        ReturnLoss,
+        [MESTemplateKeywords("RES-IN")]
+        RESIN,
+        [MESTemplateKeywords("RES-OUT")]
+        RESOUT,
+        [MESTemplateKeywords("TDR-L")]
+        TDRL,
+        [MESTemplateKeywords("TDR-H")]
+        TDRH,
+        [MESTemplateKeywords("TDR-M")]
+        TDRM,
+        [MESTemplateKeywords("WDR-M")]
+        WDRM,
+        [MESTemplateKeywords("PD-ISO")]
+        PDISO
     }
 
     /// <summary>

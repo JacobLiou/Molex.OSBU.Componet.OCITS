@@ -120,14 +120,15 @@ namespace DeviceControl
         {
             try
             {
-                if (File.Exists(Environment.CurrentDirectory + "\\set\\UDLConfig.xml"))
+                string udlConfigPath = Environment.CurrentDirectory + "\\set\\UDLConfig.xml";
+                if (!UdlRuntimeConfig.IsUdlEngineLoadDisabled() && File.Exists(udlConfigPath))
                 {                  
                     deviceEngine = new UDL2_Engine();
                     tccCtrl = new UDL2_TCC();
                     fstpCtrl = new UDL2_FSTP();
                     oswCtrl = new UDL2_OSW();
                     deviceEngine.SetDebugLogFile(Environment.CurrentDirectory + "\\UDLlog.txt");
-                    deviceEngine.LoadConfiguration(Environment.CurrentDirectory + "\\set\\UDLConfig.xml");
+                    deviceEngine.LoadConfiguration(udlConfigPath);
                     if (!GetUDLMessage(ref errMsg))
                     {
                         errMsg="加载UDL配置出错：" + errMsg;

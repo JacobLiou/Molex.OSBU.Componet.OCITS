@@ -66,10 +66,6 @@
       <EmbedInteropTypes>True</EmbedInteropTypes>
     </Reference>
     <Reference Include="Ivi.Visa, Version=5.8.0.0, Culture=neutral, PublicKeyToken=a128c98f1d7717c1, processorArchitecture=MSIL" />
-    <Reference Include="MolexUtility, Version=1.0.0.0, Culture=neutral, processorArchitecture=x86">
-      <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\..\..\bin\common\MolexUtility.dll</HintPath>
-    </Reference>
     <Reference Include="NationalInstruments.Visa, Version=17.0.0.0, Culture=neutral, PublicKeyToken=2eaa5af0834e221d, processorArchitecture=MSIL" />
     <Reference Include="RemoteClient">
       <HintPath>..\..\..\bin\common\RemoteClient.dll</HintPath>
@@ -118,6 +114,12 @@
       <Isolated>False</Isolated>
       <EmbedInteropTypes>True</EmbedInteropTypes>
     </COMReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\MolexUtility\MolexUtility\MolexUtility.csproj">
+      <Project>{72939f1a-9914-460f-9296-1b8097d5995a}</Project>
+      <Name>MolexUtility</Name>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 

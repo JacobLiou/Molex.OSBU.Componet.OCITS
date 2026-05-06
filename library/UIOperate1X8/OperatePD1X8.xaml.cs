@@ -66,7 +66,7 @@ namespace UIOperatePD1X8
         /// <summary>
         /// 所有产品测试信息
         /// </summary>
-        private List<MESControl> allProductControl; 
+        private List<FusionControl> allProductControl; 
 
         /// <summary>
         /// 与其他模块通信的事件集 
@@ -108,7 +108,7 @@ namespace UIOperatePD1X8
         public OperatePD1X8()
         {
             InitializeComponent();
-            allProductControl = new List<MESControl>();
+            allProductControl = new List<FusionControl>();
             uiVariable.TemplateID = "";
             uiVariable.IsEnable = true;
 
@@ -200,9 +200,9 @@ namespace UIOperatePD1X8
             //
 
             
-            MESControl control = new MESControl();
+            FusionControl control = new FusionControl();
             string errMsg = "";
-            if (control.OpenTemplate(amtsUrl, MESTemplateType.DC, uiVariable.SN, MESTestProcess.Test,MESTestType.Normal, "11091", "", true, false, ref errMsg))
+            if (control.OpenTemplate(uiVariable.SN, MESTestProcess.Test.ToString(), "11091", "", false, Environment.MachineName, new List<string>(), out var _, out errMsg) != "")
             {
                 if(allProductControl.Count==0)
                 {
@@ -253,7 +253,7 @@ namespace UIOperatePD1X8
         /// <returns></returns>
         private bool SnIsExist(string sn)
         {
-            foreach(MESControl mes in allProductControl)
+            foreach(FusionControl mes in allProductControl)
             {
                 if (sn == mes.ProductSN)
                     return true;
@@ -659,9 +659,10 @@ namespace UIOperatePD1X8
         private void btnSaveToAMTS_Click(object sender, RoutedEventArgs e)
         {
             string errMsg = "";
-            foreach(MESControl product in allProductControl)
+            foreach(FusionControl product in allProductControl.ToList())
             {
-                if(product.SaveDataToAMTS(product.ProductSN, amtsUrl,ref errMsg)!=0)
+                string savePath = Environment.CurrentDirectory + "\\data\\" + product.ProductSN + ".xml";
+                if(!product.UploadTestData(savePath, out errMsg))
                 {
                     ErrorBox(errMsg);
                     continue;
@@ -730,20 +731,20 @@ namespace UIOperatePD1X8
         private bool SetWavelength(double wavelength,ref string errMsg)
         {
             return true;
-            List<IOpticalSource> opticals = new List<IOpticalSource>();
-            if (0 != DeviceControl.GetOpticalSourceByWaveAndType(wavelength, Devices.Default, ref opticals, ref errMsg))
+            IOpticalSource opticalSource = null;
+            if (0 != DeviceControl.GetOpticalSourceByWaveAndType(1, ref opticalSource, ref errMsg))
             {
                 //ErrorBox(errMsg);
                 errMsg = "设置波长出错：" + errMsg;
                 return false;
             }
 
-            if (opticals[0].SetWavelength(wavelength, ref errMsg) != 0)
+            if (opticalSource.SetWavelength(wavelength, ref errMsg) != 0)
             {
                 errMsg = "设置波长出错：" + errMsg;
                 return false;
             }
-            opticalSourceType = opticals[0].GetDeviceType();
+            opticalSourceType = opticalSource.GetDeviceType();
             return true;
         }
 
@@ -1013,7 +1014,7 @@ namespace UIOperatePD1X8
         private void btnOnekeyRef_Click(object sender, RoutedEventArgs e)
         {
             //清除所有归零数据
-            foreach (MESControl product in allProductControl)
+            foreach (FusionControl product in allProductControl)
             {
                 int total = product.GetAllTestInfo().Count;
                 for (int i=0;i< total;i++)
@@ -1032,7 +1033,7 @@ namespace UIOperatePD1X8
             //一键归零是否需要放在线程中完成
             //全部重新归零
             int prodeuctIndex = 0;
-            foreach (MESControl product in allProductControl)
+            foreach (FusionControl product in allProductControl)
             {
                 List<MESTestInfo> testInfos = product.GetAllTestInfo();
                 int total = testInfos.Count;
@@ -1211,7 +1212,7 @@ namespace UIOperatePD1X8
         private void OnekeyThread()
         {
             int productIndex = -1;
-            foreach (MESControl control in allProductControl)
+            foreach (FusionControl control in allProductControl)
             {
                 productIndex++;
                 int count = control.GetAllTestInfo().Count;

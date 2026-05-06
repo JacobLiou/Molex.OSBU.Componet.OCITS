@@ -237,18 +237,22 @@ namespace UIOperatCIR
             }
 
             string errMsg = "";
-            deviceEngine.SetDebugLogFile(Environment.CurrentDirectory + "\\log.txt");
-            deviceEngine.LoadConfiguration(Environment.CurrentDirectory + "\\set\\UDLConfig.xml");
-            if(!GetMessage(ref errMsg))
+            if (!UdlRuntimeConfig.IsUdlEngineLoadDisabled())
             {
-                RealtimeMsg("加载UDL配置出错：" + errMsg);
-                return;
-            }
-            deviceEngine.OpenEngine();
-            if (!GetMessage(ref errMsg))
-            {
-                RealtimeMsg("UDL Open出错：" + errMsg);
-                return;
+                deviceEngine.SetDebugLogFile(Environment.CurrentDirectory + "\\log.txt");
+                string udlCfg = Environment.CurrentDirectory + "\\set\\UDLConfig.xml";
+                deviceEngine.LoadConfiguration(udlCfg);
+                if(!GetMessage(ref errMsg))
+                {
+                    RealtimeMsg("加载UDL配置出错：" + errMsg);
+                    return;
+                }
+                deviceEngine.OpenEngine();
+                if (!GetMessage(ref errMsg))
+                {
+                    RealtimeMsg("UDL Open出错：" + errMsg);
+                    return;
+                }
             }
             
 

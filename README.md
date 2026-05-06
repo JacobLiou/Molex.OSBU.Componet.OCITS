@@ -58,6 +58,16 @@
 
 **调试注意：** `App.xaml.cs` 中可能包含用于单机调试的 **硬编码启动 XML**；接入真实 MIMS 时需改为使用命令行参数 `e.Args` 中的内容。
 
+### 故障排除：UDL 配置 / `DevKey1` 报错
+
+若启动时出现 **「加载UDL配置出错：解析XML Device 节点 DevKey1属性 失败！」**：
+
+- **原因：** `DeviceHandle`（及个别 UI 模块）在存在 **`set\UDLConfig.xml`** 时会调用 UDL 原生库的 `LoadConfiguration`。该报错表示当前 XML 中 **`<Device>` 节点的 `DevKey1` 属性不符合 UDL 要求**（缺失、为空、或与当前 UDL/SDK 版本不兼容），常见于从其他工站拷来的不完整配置。
+- **需要正式使用 UDL 时：** 向设备/UDL 提供方索要 **与本机 DLL 版本匹配的合法 `UDLConfig.xml`**，或对照其文档逐项检查每个 `<Device … DevKey1="…" />`。
+- **本地无 UDL、仅调试界面时：** 任选其一：
+  1. 将 **`set\UDLConfig.xml`** 改名为备份（例如 `UDLConfig.xml.bak`），使程序不再尝试加载；或  
+  2. 在 **`set`** 目录下创建空标记文件 **`DisableUDLEngine.txt`**（内容为不限制，存在即可），则 **跳过整个 UDL 引擎加载**，仍可按 `Deviceconfig.xml` 走传统仪表初始化。（正式连接 UDL 产线时请删除该文件。）
+
 ---
 
 ## 相关文档

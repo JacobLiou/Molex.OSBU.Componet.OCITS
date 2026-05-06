@@ -386,7 +386,7 @@ namespace UIDemuxTest
                 else
                     testProcess = MESTestProcess.Test6;
 
-                if (templateControl.OpenTemplate(amtsUrl, templateType, txtSN.Text, testProcess, testType, userID, "", true, bShowData, ref errMsg))
+                if (templateControl.OpenTemplate(txtSN.Text, testProcess.ToString(), userID, "", false, Environment.MachineName, new List<string>(), out var _, out errMsg) != "")
                 {
                     if (errMsg != "")
                     {
@@ -596,7 +596,8 @@ namespace UIDemuxTest
             string errMsg = "";
             try
             {
-                if (templateControl.SaveDataToAMTS(templateControl.ProductSN, amtsSaveUrl, ref errMsg) != 0)
+                string savePath = Environment.CurrentDirectory + "\\data\\" + templateControl.ProductSN + ".xml";
+                if (!templateControl.UploadTestData(savePath, out errMsg))
                 {
                     uiVariable.Message = "保存失败!";
                     ErrorBox(errMsg);
@@ -605,7 +606,7 @@ namespace UIDemuxTest
                 }
 
                 templateControl.ClearAllData();
-                List<MESControl> controls = new List<MESControl>();
+                List<FusionControl> controls = new List<FusionControl>();
                 controls.Add(templateControl);
                 //更新测试信息
                 if (EventAggregator != null)

@@ -358,7 +358,7 @@ namespace UIDemuxAdjust
                     isRetest = true;
                 }
                     bool bShowData = (chkLoadData.IsChecked == true);
-                string tmpltContent = templateControl.OpenTemplate(uiVariable.SN, mainInfo.TestProcess, mainInfo.UserID, "", false, Environment.MachineName, out templateName, out errMsg);
+                string tmpltContent = templateControl.OpenTemplate(uiVariable.SN, mainInfo.TestProcess, mainInfo.UserID, "", false, Environment.MachineName, new List<string>(), out templateName, out errMsg);
                 if (tmpltContent.Length > 0)
                 {
                     if (errMsg != "")
