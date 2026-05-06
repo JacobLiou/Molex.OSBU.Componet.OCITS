@@ -1,0 +1,171 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="14.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{72939F1A-9914-460F-9296-1B8097D5995A}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <AppDesignerFolder>Properties</AppDesignerFolder>
+    <RootNamespace>MolexUtility</RootNamespace>
+    <AssemblyName>MolexUtility</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <TargetFrameworkProfile />
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>..\..\..\bin\common\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+    <PlatformTarget>x86</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>..\..\..\bin\common\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+    <PlatformTarget>x86</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x86'">
+    <DebugSymbols>true</DebugSymbols>
+    <OutputPath>..\..\..\bin\common\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <DebugType>full</DebugType>
+    <PlatformTarget>x86</PlatformTarget>
+    <ErrorReport>prompt</ErrorReport>
+    <CodeAnalysisRuleSet>MinimumRecommendedRules.ruleset</CodeAnalysisRuleSet>
+    <Prefer32Bit>false</Prefer32Bit>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x86'">
+    <OutputPath>..\..\..\bin\common\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <Optimize>true</Optimize>
+    <DebugType>pdbonly</DebugType>
+    <PlatformTarget>x86</PlatformTarget>
+    <ErrorReport>prompt</ErrorReport>
+    <CodeAnalysisRuleSet>MinimumRecommendedRules.ruleset</CodeAnalysisRuleSet>
+    <Prefer32Bit>false</Prefer32Bit>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Ivi.Visa, Version=5.6.0.0, Culture=neutral, PublicKeyToken=a128c98f1d7717c1, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\..\..\..\..\..\..\..\..\..\Program Files (x86)\IVI Foundation\VISA\Microsoft.NET\Framework32\v2.0.50727\VISA.NET Shared Components 5.6.0\Ivi.Visa.dll</HintPath>
+    </Reference>
+    <Reference Include="NationalInstruments.Visa, Version=15.5.0.49152, Culture=neutral, PublicKeyToken=2eaa5af0834e221d, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\..\..\..\..\..\..\..\..\..\Program Files (x86)\IVI Foundation\VISA\Microsoft.NET\Framework32\v4.0.30319\NI VISA.NET 15.5\NationalInstruments.Visa.dll</HintPath>
+    </Reference>
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Web.Services" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Windows.Forms.DataVisualization" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="System.Data.DataSetExtensions" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Xml" />
+    <Reference Include="USL.SYS, Version=1.0.0.3, Culture=neutral, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\..\bin\common\USL.SYS.dll</HintPath>
+    </Reference>
+    <Reference Include="USL.TAS, Version=1.0.0.5, Culture=neutral, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\..\..\CSharp\OCITS\library\MolexUtility\Debug\USL.TAS.dll</HintPath>
+    </Reference>
+    <Reference Include="USL.TDB, Version=1.0.0.2, Culture=neutral, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\..\bin\common\USL.TDB.dll</HintPath>
+    </Reference>
+    <Reference Include="WindowsBase" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Algorithm\IAlgotithm.cs" />
+    <Compile Include="Algorithm\IInterleaverAlgorithm.cs" />
+    <Compile Include="ClientSocket.cs" />
+    <Compile Include="Command\CustomCommand.cs" />
+    <Compile Include="CommonFunction.cs" />
+    <Compile Include="Device\ConfigXmlParser.cs" />
+    <Compile Include="Device\Devices.cs" />
+    <Compile Include="Device\IAutomation.cs" />
+    <Compile Include="Device\ICDScan.cs" />
+    <Compile Include="Device\ICurrent.cs" />
+    <Compile Include="Device\IDeviceHandle.cs" />
+    <Compile Include="Device\IFSTPScan.cs" />
+    <Compile Include="Device\IInterleaverScan.cs" />
+    <Compile Include="Device\IOpticalSource.cs" />
+    <Compile Include="Device\IOpticalSwitch.cs" />
+    <Compile Include="Device\IPDLController.cs" />
+    <Compile Include="Device\IPowermeter.cs" />
+    <Compile Include="Device\IUDLFSTP.cs" />
+    <Compile Include="Device\IUDLSwitch.cs" />
+    <Compile Include="Device\IUDLTCC.cs" />
+    <Compile Include="Device\ScanParam.cs" />
+    <Compile Include="FusionControl.cs" />
+    <Compile Include="IniParser.cs" />
+    <Compile Include="MESControl.cs" />
+    <Compile Include="MESLinkField.cs" />
+    <Compile Include="MesTemplateInfo.cs" />
+    <Compile Include="MsgXmlParser.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Protocol\CurveUpdateDetail.cs" />
+    <Compile Include="Protocol\MainInitInfo.cs" />
+    <Compile Include="Protocol\MsgBaseInfo.cs" />
+    <Compile Include="Protocol\RealtimePowerInfo.cs" />
+    <Compile Include="Protocol\RealtimeStatusInfo.cs" />
+    <Compile Include="Protocol\XmlStr.cs" />
+    <Compile Include="SerialControl\ISerial.cs" />
+    <Compile Include="SerialControl\SerialDotNet.cs" />
+    <Compile Include="SerialControl\SerialNI.cs" />
+    <Compile Include="SharedTool.cs" />
+    <Compile Include="UIList\ColumnMap.cs" />
+    <Compile Include="UIList\IndexMap.cs" />
+    <Compile Include="UIList\ItemContent.cs" />
+    <Compile Include="UIList\ItemDemuxContent.cs" />
+    <Compile Include="UIList\KeyDownInfo.cs" />
+    <Compile Include="UIList\ShowContent.cs" />
+    <Compile Include="UIList\UIParamShow.cs" />
+    <Compile Include="WebserviceHelper.cs" />
+    <Compile Include="Win32API.cs" />
+    <Compile Include="XMLStructParse.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <COMReference Include="MSXML2">
+      <Guid>{F5078F18-C551-11D3-89B9-0000F81FE221}</Guid>
+      <VersionMajor>6</VersionMajor>
+      <VersionMinor>0</VersionMinor>
+      <Lcid>0</Lcid>
+      <WrapperTool>tlbimp</WrapperTool>
+      <Isolated>False</Isolated>
+      <EmbedInteropTypes>True</EmbedInteropTypes>
+    </COMReference>
+    <COMReference Include="UDL2_ServerLib">
+      <Guid>{F318EABB-DCD0-47C1-A93D-AA9AE9440CF0}</Guid>
+      <VersionMajor>1</VersionMajor>
+      <VersionMinor>0</VersionMinor>
+      <Lcid>0</Lcid>
+      <WrapperTool>tlbimp</WrapperTool>
+      <Isolated>False</Isolated>
+      <EmbedInteropTypes>True</EmbedInteropTypes>
+    </COMReference>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
+       Other similar extension points exist, see Microsoft.Common.targets.
+  <Target Name="BeforeBuild">
+  </Target>
+  <Target Name="AfterBuild">
+  </Target>
+  -->
+</Project>
