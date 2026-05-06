@@ -1,0 +1,105 @@
+﻿<UserControl x:Class="UIOperatePD1X8.OperatePD1X8"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:UIOperatePD1X8"
+             xmlns:c="clr-namespace:MolexUtility.Command;assembly=MolexUtility"
+             mc:Ignorable="d" Loaded="UserControl_Loaded" BorderThickness="1" BorderBrush="LightBlue">
+    <UserControl.CommandBindings>
+        <CommandBinding Command="c:CustomCommand.ILTest" Executed="ILTestCommand_Executed"/>
+    </UserControl.CommandBindings>
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="528*"/>
+            <ColumnDefinition Width="337*"/>
+            <ColumnDefinition Width="188*"/>
+            <ColumnDefinition Width="262*"/>
+        </Grid.ColumnDefinitions>
+        <GroupBox Grid.Column="0" Background="AliceBlue" BorderThickness="2">
+            <Grid >
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="6*"/>
+                    <ColumnDefinition Width="6*"/>
+                    <ColumnDefinition Width="6*"/>
+                    <ColumnDefinition Width="6*"/>
+                    <ColumnDefinition Width="6*"/>
+                    <ColumnDefinition Width="6*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="10*"/>
+                    <RowDefinition Height="10*"/>
+                    <RowDefinition Height="10*"/>
+                </Grid.RowDefinitions>
+                <StackPanel Grid.Row="0"  Orientation="Horizontal" VerticalAlignment="Stretch" Grid.ColumnSpan="2">
+                    <Label Content="SN:" Margin="2" VerticalAlignment="Center"/>
+                    <TextBox Name="txtBoxSN" Width="160" Height="30" Text="{Binding SN}" Margin="8,4,20,4" CharacterCasing="Upper" BorderBrush="#96CDCD" BorderThickness="2"/>
+                </StackPanel>
+                <Button Grid.Row="0" Grid.Column="2" Name="btnOpenTemplate" Content="打开(enter)"  Margin="5" Click="btnOpenTemplate_Click" IsEnabled="{Binding IsEnable}"/>
+                <Button Grid.Row="0" Grid.Column="3" Name="btnSaveToAMTS" Content="保存(Insert)"  Margin="5"  Click="btnSaveToAMTS_Click" IsEnabled="{Binding IsEnable}"/>
+                <Button Grid.Row="0" Grid.Column="4" Name="btnRecoverData" Content="数据恢复"  Margin="5" DockPanel.Dock="Left" IsEnabled="{Binding IsEnable}"/>
+                <Button Grid.Row="0" Grid.Column="5" Name="btnDeleteProduct" Content="删除产品"  Margin="5" DockPanel.Dock="Left" Click="btnDeleteProduct_Click" IsEnabled="{Binding IsEnable}"/>
+                <StackPanel Grid.Row="1" Orientation="Horizontal" VerticalAlignment="Stretch" Grid.ColumnSpan="2">
+                    <CheckBox Name="checkGetRefData" Content="调用归零数据" Margin="40,2,30,2" VerticalAlignment="Center"/>
+                    <CheckBox Name="checkHead" Content="带头" Margin="2,2,18,2" VerticalAlignment="Center"/>
+                </StackPanel>
+                <Button Name="btnILRef" Grid.Row="1" Grid.Column="2" Content="IL Ref(/)"   Margin="5" DockPanel.Dock="Left"  Click="btnILRef_Click" IsEnabled="{Binding IsEnable}"/>
+                <Button Name="btnRLRef" Grid.Row="1" Grid.Column="3" Content="RL Ref(-)"   Margin="5" DockPanel.Dock="Left" Click="btnRLRef_Click"  IsEnabled="{Binding IsEnable}"/>
+                <Button Name="btnOnekeyRef" Grid.Row="1" Grid.Column="4" Content="一键归零"  Margin="5" DockPanel.Dock="Left" Click="btnOnekeyRef_Click" IsEnabled="{Binding IsEnable}"/>
+                <Button Name="btnFindPower" Grid.Row="1" Grid.Column="5" Content="找功率"  Margin="5" DockPanel.Dock="Left" Click="btnFindPower_Click" IsEnabled="{Binding IsEnable}"/>
+                <Button Name="btnILTest" Grid.Row="2" Grid.Column="0" Content="IL测试"   Margin="5,5,5,0" DockPanel.Dock="Left" Click="BtnILTest_Click" IsEnabled="{Binding IsEnable}"/>
+                <Button Name="btUnqualifiedTest" Grid.Row="2" Grid.Column="1" Content="不合格项测试"  Margin="5" DockPanel.Dock="Left" Click="btUnqualifiedTest_Click" IsEnabled="{Binding IsEnable}"/>
+                <!--Button Name="BtnILTest" Content="测试(+)"  Width="80" Margin="5" DockPanel.Dock="Left" Command="c:CustomCommand.ILTest"/-->
+                <Button Name="btnSingleTest" Grid.Row="2" Grid.Column="2" Content="单行测试(+)"   Margin="5" DockPanel.Dock="Left" Click="btnSingleTest_Click" IsEnabled="{Binding IsEnable}"/>
+                <Button Name="btnOnekeyTest" Grid.Row="2" Grid.Column="3" Content="一键测试"  Margin="5" DockPanel.Dock="Left" Click="btnOnekeyTest_Click" IsEnabled="{Binding IsEnable}"/>
+                <Button Name="btnStopTest" Grid.Row="2" Grid.Column="4" Content="停止测试"   Margin="5" DockPanel.Dock="Left" Click="btnStopTest_Click"  />
+                <Button Name="btnPWMReset" Grid.Row="2" Grid.Column="5" Content="功率计复位"   Margin="5" DockPanel.Dock="Left"  IsEnabled="{Binding IsEnable}"/>
+            </Grid>
+        </GroupBox>
+        <GroupBox Grid.Column="1" Background="AliceBlue" BorderThickness="2" Grid.ColumnSpan="3">
+            <Grid >
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="1*"/>
+                    <RowDefinition Height="2*"/>
+                </Grid.RowDefinitions>
+                <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Stretch" Grid.ColumnSpan="3">
+                    <Grid Grid.Row="0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="90"/>
+                            <ColumnDefinition Width="40*"/>
+                            <ColumnDefinition Width="100"/>
+                            <ColumnDefinition Width="15*"/>
+                            <ColumnDefinition Width="90"/>
+                            <ColumnDefinition Width="20*"/>
+                        </Grid.ColumnDefinitions>
+                        <Label Grid.Column="0" Content="产品型号：" VerticalAlignment="Center" Width="90"/>
+                        <Label Grid.Column="1" Name="lblProductModel" Width="300" BorderBrush="#96CDCD" BorderThickness="2" Margin="0,5,15,5" Content="{Binding TemplateID}"/>
+                        <Label Grid.Column="2" Content="高低温倒计时：" Width="100" VerticalAlignment="Center"/>
+                        <Label Grid.Column="3" Name="lblTemperatureCount" Width="150" BorderBrush="#96CDCD" BorderThickness="2" Margin="0,5,15,5" Content="{Binding HeatTime}"/>
+                        <Label Grid.Column="4" Content="剩余个数：" Width="90" VerticalAlignment="Center"/>
+                        <Label Grid.Column="5" Name="lblUnTestCount" Width="70" BorderBrush="#96CDCD" BorderThickness="2" Margin="0,5,15,5" Content="{Binding UnTestCount}"/>
+                    </Grid>
+                </StackPanel>
+                <StackPanel Grid.Row="1" Orientation="Horizontal" VerticalAlignment="Stretch" Grid.ColumnSpan="3" Margin="0,12,0,13">
+                    <Grid Grid.Row="0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="90"/>
+                            <ColumnDefinition Width="40*"/>
+                            <ColumnDefinition Width="100"/>
+                            <ColumnDefinition Width="15*"/>
+                            <ColumnDefinition Width="90"/>
+                            <ColumnDefinition Width="20*"/>
+                        </Grid.ColumnDefinitions>
+                        <Label Grid.Column="0" Content="测试状态："  Width="90" VerticalAlignment="Center"/>
+                        <Label Grid.Column="1" Name="lblTestStatus" Width="300" BorderBrush="#96CDCD" BorderThickness="2" Margin="0,5,15,5" Content="{Binding TestStatus}"  VerticalAlignment="Stretch" />
+                        <Label Grid.Column="2" Content="功率计复位时间:"  VerticalAlignment="Center" Width="100"/>
+                        <Label Grid.Column="3" Name="lblPWMRestTime" Width="150" BorderBrush="#96CDCD" BorderThickness="2" Margin="0,5,15,5" Content="{Binding PowermeterResetTime}"/>
+                        <Label Grid.Column="4" Content="测试结果："  VerticalAlignment="Center" Width="100"/>
+                        <Image Grid.Column="5" Name="passOrFailImg" Margin="2" Width="70"  />
+                    </Grid>
+                </StackPanel>
+
+            </Grid>
+        </GroupBox>
+    </Grid>
+</UserControl>

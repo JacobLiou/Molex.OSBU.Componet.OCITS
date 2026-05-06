@@ -1,0 +1,24 @@
+﻿<UserControl x:Class="ConfigModel.SameTypeDevices"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:ConfigModel"
+             mc:Ignorable="d" FontSize="15"
+             >
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="40"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <DockPanel HorizontalAlignment="Right" >
+            <Button Name="add" Content="增加" Width="100" Margin="10,2,10,2" Click="add_Click"/>
+            <Button Name="deleteSelect" Content="删除" Width="100" Margin="10,2,10,2" Click="deleteSelect_Click"/>
+        </DockPanel>
+        <!--StackPanel Grid.Row="1" HorizontalAlignment="Stretch" Margin="5" -->
+        <ScrollViewer Grid.Row="1" x:Name="scrList" Margin="0" VerticalScrollBarVisibility="Auto" CanContentScroll="True">
+            <StackPanel Grid.Row="1" HorizontalAlignment="Stretch" Margin="5" Name="configPannel" >
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

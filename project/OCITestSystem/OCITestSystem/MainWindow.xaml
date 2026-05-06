@@ -1,0 +1,72 @@
+﻿<Window x:Class="OCITestSystem.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:OCITestSystem"
+        mc:Ignorable="d"
+        WindowStyle="None"
+        Title="光器件集成测试系统（OCITS）" Height="279.054" Width="477.703" Loaded="Window_Loaded" Background="AliceBlue" FontFamily="Arial,SimSun" PreviewKeyDown="Window_PreviewKeyDown" KeyDown="Window_KeyDown">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="30"/>
+            <RowDefinition Height="30"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="30"/>
+        </Grid.RowDefinitions>
+        <Grid Grid.Row="0" MouseMove="Title_MouseMove">
+            <Grid.Background>
+                <LinearGradientBrush EndPoint="0.5,1" StartPoint="0.5,0">
+                    <GradientStop Color="SkyBlue" Offset="0"/>
+                    <GradientStop Color="AliceBlue" Offset="1"/>
+                </LinearGradientBrush>
+            </Grid.Background>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="30"/>
+                <ColumnDefinition Width="30"/>
+                <ColumnDefinition Width="30"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Name="txtTitle" Text="光器件集成测试系统（OCITS）    © Molex Confidential-Internal Information© Molex, LLC – All Rights Reserved. Unauthorized Reproduction/Distribution is Prohibited." FontSize="20"/>
+            <Button Grid.Column="1" Content="一" Height="20" FontSize="10" FontWeight="Bold"  Click="Mini_Click" VerticalAlignment="Top" Background="#FFB2D7F7"/>
+            <Button Grid.Column="2" Content="口" Height="20" FontSize="10" FontWeight="Bold" Click="Max_Click" VerticalAlignment="Top" Background="#FFB2D7F7"/>
+            <Button Grid.Column="3" Content="X" Height="20" FontSize="10" FontWeight="Bold" Click="Close_Click" VerticalAlignment="Top" Background="#FFB2D7F7"/>
+        </Grid>
+        <Menu Grid.Row="1" Background="AliceBlue" Name="menu" FontSize="15">
+        <!--" MenuItem Header="设置" FontSize="15" Name="menuConfig">
+                <MenuItem Header="设备配置"/>
+        </-->
+        </Menu>
+        <Grid Grid.Row="2" Name="rootGrid">
+
+        </Grid>
+        <Grid Grid.Row="3" Background="AliceBlue">
+            <StatusBar Name="statusShow" Background="AliceBlue">
+                <StatusBarItem Name="barUserID" Margin="5,0,5,0" FontSize="15"/>
+                <StatusBarItem Name="barLoginType" Margin="5,0,5,0" FontSize="15"/>
+                <StatusBarItem Name="barTemplate" Margin="5,0,5,0" FontSize="15"/>
+                <StatusBarItem Name="barTmpltPath" Margin="5,0,5,0" FontSize="15"/>
+                <StatusBarItem Name="curStatus" Margin="5,0,5,0" FontSize="15"/>
+            </StatusBar>
+        </Grid>
+        <!--Grid.RowDefinitions>
+            <RowDefinition Height="40"/>
+            <RowDefinition Height="*"/>
+        </>
+        <Grid Grid.Row="0" >
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="40"/>
+                <ColumnDefinition Width="40"/>
+                <ColumnDefinition Width="40"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="光器件集成测试系统（OCITS)" FontSize="20" VerticalAlignment="Stretch" HorizontalAlignment="Stretch" Background="AliceBlue"/>
+            <Button Name="miniBotton" Grid.Column="1" HorizontalAlignment="Right" Width="40"/>
+            <Button Name="maxBotton" Grid.Column="2"/>
+            <Button Name="closeBotton" Grid.Column="3"/>
+        </Grid>
+        <Grid Grid.Row="1" Name="rootGrid">
+            
+        </Grid-->
+    </Grid>
+</Window>

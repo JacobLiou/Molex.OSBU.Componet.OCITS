@@ -1,0 +1,61 @@
+﻿<Window x:Class="OCITSAutoUpdate.Login"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:OCITSAutoUpdate"
+        mc:Ignorable="d"
+         WindowStyle="None"
+         Height="400" Width="800" Background="AliceBlue" Closed="Window_Closed" KeyDown="Window_KeyDown">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="30"/>
+            
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="160"/>
+        </Grid.RowDefinitions>
+        <Grid Grid.Row="0" MouseMove="Title_MouseMove">
+            <Grid.Background>
+                <LinearGradientBrush EndPoint="0.5,1" StartPoint="0.5,0">
+                    <GradientStop Color="SkyBlue" Offset="0"/>
+                    <GradientStop Color="AliceBlue" Offset="1"/>
+                </LinearGradientBrush>
+            </Grid.Background>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="30"/>
+                <ColumnDefinition Width="30"/>
+                <ColumnDefinition Width="30"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="光器件集成测试系统（OCITS）-- 登陆" FontSize="20"/>
+            <Button Grid.Column="1" Content="一" Height="20" FontSize="10" FontWeight="Bold"  Click="Mini_Click" VerticalAlignment="Top" Background="#FFB2D7F7"/>
+            <Button Grid.Column="2" Content="口" Height="20" FontSize="10" FontWeight="Bold" Click="Max_Click" VerticalAlignment="Top" Background="#FFB2D7F7"/>
+            <Button Grid.Column="3" Content="X" Height="20" FontSize="10" FontWeight="Bold" Click="Close_Click" VerticalAlignment="Top" Background="#FFB2D7F7"/>
+        </Grid>
+        <Grid Grid.Row="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="40"/>
+                <RowDefinition Height="40"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="20"/>
+            </Grid.RowDefinitions>
+            <DockPanel HorizontalAlignment="Center" Grid.Row="0">
+                <Label Content="用户名：" FontSize="15"/>
+                <TextBox Name="userName" Width="100" Margin="5"/>
+            </DockPanel>
+            <DockPanel HorizontalAlignment="Center" Grid.Row="1" >
+                <Label Content="密    码：" FontSize="15"/>
+                <PasswordBox Name="password" Width="100" Margin="5"/>
+            </DockPanel>
+            <DockPanel HorizontalAlignment="Center" Grid.Row="2">
+                <Button Name="loginOK" Width="100" Margin="5" FontSize="15" FontWeight="Bold" Content="确定" Click="loginOK_Click"/>
+                <Button Name="loginCansel" Width="100" Margin="5" FontSize="15" FontWeight="Bold" Content="取消" Click="loginCansel_Click"/>
+            </DockPanel>
+        </Grid>
+        <Grid Grid.Row="1">
+            <TabControl x:Name="tabStations" ItemsSource="{Binding}"  Grid.Row="0" Grid.RowSpan="3" Grid.ColumnSpan="2" Style="{StaticResource ResourceKey=TabControlStyle}">
+              
+            </TabControl>
+        </Grid>
+    </Grid>
+</Window>

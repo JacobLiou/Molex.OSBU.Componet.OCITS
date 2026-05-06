@@ -1,0 +1,20 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 11.00
+# Visual Studio 2010
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MoUtilityLib", "MoUtilityLib\MoUtilityLib.csproj", "{5BEA1AAF-D5A2-4D2E-93AF-35966EF8AEB6}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5BEA1AAF-D5A2-4D2E-93AF-35966EF8AEB6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5BEA1AAF-D5A2-4D2E-93AF-35966EF8AEB6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5BEA1AAF-D5A2-4D2E-93AF-35966EF8AEB6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5BEA1AAF-D5A2-4D2E-93AF-35966EF8AEB6}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

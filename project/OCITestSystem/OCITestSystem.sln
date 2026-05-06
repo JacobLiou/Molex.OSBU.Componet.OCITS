@@ -1,0 +1,38 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 14
+VisualStudioVersion = 14.0.25420.1
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OCITestSystem", "OCITestSystem\OCITestSystem.csproj", "{BD6A79BE-5CDA-41CE-B29C-70D024EEE221}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MolexUtility", "..\..\library\MolexUtility\MolexUtility\MolexUtility.csproj", "{72939F1A-9914-460F-9296-1B8097D5995A}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Debug|x86 = Debug|x86
+		Release|Any CPU = Release|Any CPU
+		Release|x86 = Release|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{BD6A79BE-5CDA-41CE-B29C-70D024EEE221}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BD6A79BE-5CDA-41CE-B29C-70D024EEE221}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BD6A79BE-5CDA-41CE-B29C-70D024EEE221}.Debug|x86.ActiveCfg = Debug|x86
+		{BD6A79BE-5CDA-41CE-B29C-70D024EEE221}.Debug|x86.Build.0 = Debug|x86
+		{BD6A79BE-5CDA-41CE-B29C-70D024EEE221}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BD6A79BE-5CDA-41CE-B29C-70D024EEE221}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BD6A79BE-5CDA-41CE-B29C-70D024EEE221}.Release|x86.ActiveCfg = Release|x86
+		{BD6A79BE-5CDA-41CE-B29C-70D024EEE221}.Release|x86.Build.0 = Release|x86
+		{72939F1A-9914-460F-9296-1B8097D5995A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{72939F1A-9914-460F-9296-1B8097D5995A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{72939F1A-9914-460F-9296-1B8097D5995A}.Debug|x86.ActiveCfg = Debug|x86
+		{72939F1A-9914-460F-9296-1B8097D5995A}.Debug|x86.Build.0 = Debug|x86
+		{72939F1A-9914-460F-9296-1B8097D5995A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{72939F1A-9914-460F-9296-1B8097D5995A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{72939F1A-9914-460F-9296-1B8097D5995A}.Release|x86.ActiveCfg = Release|x86
+		{72939F1A-9914-460F-9296-1B8097D5995A}.Release|x86.Build.0 = Release|x86
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

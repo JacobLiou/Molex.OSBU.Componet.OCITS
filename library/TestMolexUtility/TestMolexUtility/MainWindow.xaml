@@ -1,0 +1,105 @@
+﻿<Window x:Class="TestMolexUtility.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:TestMolexUtility"
+        mc:Ignorable="d"
+        Title="MainWindow"  Background="AliceBlue">
+    <Window.Resources>
+        <DataTemplate x:Key="listBoxTemplate">
+            <StackPanel Margin="3">
+                <DockPanel >
+                    <TextBlock FontWeight="Bold" Text="{Binding ShowName}" DockPanel.Dock="Left" Width="80" Margin="0,5,0,5"/>
+                    <TextBlock Text="  " />
+                    <TextBlock Text="{Binding ShowContent}" Foreground="Green" FontWeight="Bold" Margin="0,5,0,5"/>
+                </DockPanel>
+            </StackPanel>
+        </DataTemplate>
+    </Window.Resources>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="100*"/>
+            <RowDefinition Height="40"/>
+            <RowDefinition Height="40"/>
+            <RowDefinition Height="180*"/>
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="180"/>
+            <ColumnDefinition Width="95*"/>
+            <ColumnDefinition Width="30*"/>
+            <ColumnDefinition Width="42*"/>
+        </Grid.ColumnDefinitions>
+        <DockPanel Grid.Row="0"  Grid.Column="1">
+            <WindowsFormsHost  Name="WinFormForChart" Margin="2"/>
+        </DockPanel>
+        <DockPanel Grid.Row="0" Grid.RowSpan="3" Grid.Column="3" Margin="0,0,2,0" Background="AliceBlue">
+            <GroupBox Header="产品信息" BorderBrush="SteelBlue" BorderThickness="2">
+                <!--ListBox Name="ProductInfoList" ItemTemplate="{StaticResource listBoxTemplate}" Background="AliceBlue">
+                    <ListBox.Resources>
+                        <Style TargetType="ListBoxItem">
+                            <Style.Resources>
+                                <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="AliceBlue"/>
+                                <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="Black"/>
+                            </Style.Resources>
+                        </Style>
+                    </ListBox.Resources>
+                </-->
+            </GroupBox>
+        </DockPanel>
+        <Border Grid.Row="0" Grid.RowSpan="3" Grid.Column="0" Background="AliceBlue">
+            <GroupBox Header="基本信息" BorderBrush="SteelBlue" BorderThickness="2">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="30*"/>
+                        <RowDefinition Height="30*"/>
+                        <RowDefinition Height="30*"/>
+                        <RowDefinition Height="30*"/>
+                        <RowDefinition Height="30*"/>
+                        <RowDefinition Height="30*"/>
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="45"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Label Content="UseID:" Grid.Row="0" Grid.Column="0" VerticalAlignment="Center"/>
+                    <Label Name="LblUserID" Grid.Row="0" Grid.Column="1" Height="30" Margin="2" BorderBrush="#96CDCD" BorderThickness="2"/>
+                    <Label Content="PC:" Grid.Row="1" Grid.Column="0" VerticalAlignment="Center"/>
+                    <Label Name="LblPC" Grid.Row="1" Grid.Column="1" Height="30" Margin="2" BorderBrush="#96CDCD" BorderThickness="2"/>
+                    <Label Content="工序：" Grid.Row="2" Grid.Column="0" VerticalAlignment="Center"/>
+                    <ComboBox Name="ComboTestProcess" Grid.Row="2" Grid.Column="1" Margin="2" Height="30" VerticalAlignment="Center" Background="AliceBlue" BorderBrush="#96CDCD" BorderThickness="2" SelectionChanged="ComboTestProcess_SelectionChanged" />
+                    <Label Content="模板：" Grid.Row="3" Grid.Column="0" VerticalAlignment="Center"/>
+                    <ComboBox Name="ComboTemplateType" Grid.Row="3" Grid.Column="1" Margin="2" Height="30" VerticalAlignment="Center" Background="AliceBlue" BorderThickness="2" BorderBrush="#96CDCD" SelectionChanged="ComboTemplateType_SelectionChanged" />
+                    <CheckBox Name="CheckRetest" Content="复测" Margin="4" VerticalAlignment="Center"  Grid.Row="4" Grid.ColumnSpan="2" />
+                    <CheckBox Name="CheckShowData"  Content="加载测试数据" Margin="4" VerticalAlignment="Center" Grid.Row="5" Grid.ColumnSpan="2" />
+                </Grid>
+            </GroupBox>
+        </Border>
+        <DockPanel Grid.Row="0" Grid.RowSpan="3" Grid.Column="2">
+            <GroupBox Header="功率计" BorderBrush="SteelBlue" BorderThickness="2" Background="AliceBlue">
+                <ListBox Name="PWMRealTimeShow" Background="AliceBlue" FontSize="50"/>
+            </GroupBox>
+        </DockPanel>
+        <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Background="AliceBlue">
+            <Label Content="SN:" Margin="2" VerticalAlignment="Center"/>
+            <TextBox Name="TxtBoxSN" Width="130" Height="30" Margin="2" CharacterCasing="Upper" BorderBrush="#96CDCD" BorderThickness="2"/>
+            <Button Name="BtnOpenTemplate" Content="打开(enter)" Width="80" Margin="4" Click="BtnOpenTemplate_Click" />
+            <Button Name="BtnSaveToAMTS" Content="保存(Insert)" Width="80" Margin="4" Click="BtnSaveToAMTS_Click" />
+            <Button Name="BtnUnLockPWM" Content="功率计解锁" Width="80" Margin="4" Click="BtnUnLockPWM_Click"/>
+            <Label Content="测试结果：" Margin="10,2,2,2" VerticalAlignment="Center"/>
+            <!--Image Name="PassOrFailImg" Margin="2" Width="70" Loaded="PassOrFail_Load" /-->
+        </StackPanel>
+        <StackPanel Grid.Row="2" Grid.Column="1"  Background="AliceBlue" Orientation="Horizontal">
+            <Button Name="BtnILRef" Content="IL Ref(/)"  Width="80" Margin="5" DockPanel.Dock="Left" Click="BtnILRef_Click" />
+            <Button Name="BtnRLRef" Content="RL Ref(-)"  Width="80" Margin="5" DockPanel.Dock="Left" Click="BtnRLRef_Click" />
+            <Button Name="BtnILTest" Content="测试(+)"  Width="80" Margin="5" DockPanel.Dock="Left" Click="BtnILTest_Click" />
+            <Button Name="BtnRLTest" Content="RL测试(*)"  Width="80" Margin="5" DockPanel.Dock="Left" Click="BtnRLTest_Click" />
+            <Button Name="BtnPWMReset" Content="功率计复位"  Width="80" Margin="5" DockPanel.Dock="Left" Click="BtnPWMReset_Click" />
+            <Label Content="功率计复位时间:" VerticalAlignment="Center"/>
+            <Label Name="PWMRestTime" Width="100" BorderBrush="#96CDCD" BorderThickness="2" Margin="3"/>
+        </StackPanel>
+        <DockPanel Grid.Row="3" Grid.ColumnSpan="4" >
+            <WindowsFormsHost  Name="WinFormForDataGridView" Margin="2" Keyboard.KeyDown="WinFormForDataGridView_PreviewKeyDown"/>
+        </DockPanel>
+    </Grid>
+</Window>

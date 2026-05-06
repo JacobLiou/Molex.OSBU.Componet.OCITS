@@ -1,0 +1,42 @@
+﻿<UserControl x:Class="UIDemuxAdjust.DemuxAdjust"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:UIDemuxAdjust"
+             mc:Ignorable="d" 
+             BorderThickness="1" BorderBrush="LightBlue" FontSize="13" Unloaded="UserControl_Unloaded" Loaded="UserControl_Loaded" KeyDown="UserControl_KeyDown">
+    <Grid>
+        <Grid.RowDefinitions >
+            <RowDefinition Height="*"></RowDefinition>
+            <RowDefinition Height="*"></RowDefinition>
+            <RowDefinition Height="*"></RowDefinition>
+            <RowDefinition Height="*"></RowDefinition>
+            <RowDefinition Height="*"></RowDefinition>
+        </Grid.RowDefinitions>
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Height="30">
+            <Label >SN:</Label>
+            <TextBox Name="txtSN" MinWidth="100" Margin="5,2,2,2" Text="{Binding SN}" CharacterCasing="Upper" BorderBrush="#96CDCD" BorderThickness="2" ></TextBox>
+            <CheckBox x:Name="chkRetest" Margin="5,2,2,2" VerticalAlignment="Center">复测</CheckBox>
+            <CheckBox x:Name="chkLoadData" Margin="5,2,2,2" VerticalAlignment="Center">加载测试数据</CheckBox>
+        </StackPanel>
+        <StackPanel Grid.Row="1" Orientation="Horizontal"  Height="30">
+            <Button x:Name="btnOpenTemplate" Margin="5,2,2,2" MinWidth="100" Click="btnOpenTemplate_Click">打开(Enter)</Button>
+            <Button x:Name="btnSaveToAMTS" Margin="5,2,2,2" MinWidth="100" Click="btnSaveToAMTS_Click">保存(-,照光前)</Button>
+            <Button x:Name="btnSaveToAMTS2" Margin="5,2,2,2" MinWidth="100" Click="btnSaveToAMTS2_Click">保存(*,照光后)</Button>
+            <Label Content="测试结果：" Margin="10,2,2,2" VerticalAlignment="Center"/>
+            <Image Name="imgResult" Margin="2" Width="50"/>
+        </StackPanel>
+        <StackPanel Grid.Row="2" Orientation="Horizontal"  Height="30">
+            <Button x:Name="btnILRef" Margin="5,2,2,2" MinWidth="100" Click="btnILRef_Click">IL Ref(/)</Button>
+            <Button x:Name="btnILTest" Margin="5,2,2,2" MinWidth="100" Click="btnILTest_Click">测试(+)</Button>
+            <Button x:Name="btnPMReset" Margin="5,2,2,2" MinWidth="100" Click="btnPMReset_Click">功率计复位</Button>
+            <!--<Button x:Name="btnPMUnLock" Margin="5,2,2,2" MinWidth="100" Click="btnPMUnLock_Click">功率计解锁</Button>-->
+        </StackPanel>
+        <StackPanel Grid.Row="3" Orientation="Horizontal" Height="30">
+            <Label Margin="5,2,2,2">功率计复位时间:</Label>
+            <Label x:Name="lblPMResetTime" Content="{Binding PMResetTime}" Width="100" BorderBrush="#96CDCD" BorderThickness="1" Margin="2"/>
+        </StackPanel>
+            <Label x:Name="lblMessage" Content="{Binding Message}" Grid.Row="4"></Label>
+    </Grid>
+</UserControl>
