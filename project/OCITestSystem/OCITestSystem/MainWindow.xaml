@@ -33,9 +33,11 @@
             <Button Grid.Column="3" Content="X" Height="20" FontSize="10" FontWeight="Bold" Click="Close_Click" VerticalAlignment="Top" Background="#FFB2D7F7"/>
         </Grid>
         <Menu Grid.Row="1" Background="AliceBlue" Name="menu" FontSize="15">
-        <!--" MenuItem Header="设置" FontSize="15" Name="menuConfig">
-                <MenuItem Header="设备配置"/>
-        </-->
+            <!--<MenuItem Header="设置"
+                      FontSize="15"
+                      Name="menuConfig">
+                <MenuItem Header="设备配置" />
+            </MenuItem>-->
         </Menu>
         <Grid Grid.Row="2" Name="rootGrid">
 

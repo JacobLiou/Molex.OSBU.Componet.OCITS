@@ -259,9 +259,10 @@ namespace OCITestSystem
                 aggregateCatalog.Catalogs.Add(directoryCatalog);*/
                 //设置目录，让引擎能自动去发现新的扩展
                 var catalog = new AggregateCatalog();
-                //MessageBox.Show(GetExeDir() + "\\..\\module");
-                catalog.Catalogs.Add(new DirectoryCatalog(GetExeDir() + "\\module"));
-                //var catalog = new DirectoryCatalog(Environment.CurrentDirectory+"\\..\\module");
+                //MessageBox.Show(GetExeDir() + "\\module");
+                var dc = new DirectoryCatalog(GetExeDir() + "\\module");
+                catalog.Catalogs.Add(dc);
+                var ss = dc.LoadedFiles;
                 container = new CompositionContainer(catalog);
                 container.ComposeParts(this);
             }
