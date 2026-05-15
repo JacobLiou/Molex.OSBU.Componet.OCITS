@@ -97,6 +97,7 @@
     <Compile Include="Powermeter\PowermeterOplink1830.cs" />
     <Compile Include="Switch\Switch3STD.cs" />
     <Compile Include="Switch\SwitchOMS.cs" />
+    <Compile Include="Switch\SwitchMPLUS.cs" />
     <Compile Include="Switch\OpticalSwitchBase.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Switch\SwitchMini1X8.cs" />

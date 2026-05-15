@@ -236,6 +236,19 @@ namespace DeviceControl
 
                             }
                         }
+                        else if (config.ControlName == Devices.MPLUSSwitch.GetAdditional())
+                        {
+                            string err = "";
+                            SwitchMPLUS mplusSwitch = new SwitchMPLUS(config.Control[0], config.Control[1], config.ShowName, ref err);
+                            if (err.Length == 0)
+                                opticalSwitchs.Add(mplusSwitch);
+                            else
+                            {
+                                errMsg += err;
+                                MolexUtility.CommonFunction.WriteLog(string.Format("err:{0}", err));
+
+                            }
+                        }
                         if (config.ControlName == Devices.PwmOplink1830.GetAdditional())
                         {
                             string err = "";

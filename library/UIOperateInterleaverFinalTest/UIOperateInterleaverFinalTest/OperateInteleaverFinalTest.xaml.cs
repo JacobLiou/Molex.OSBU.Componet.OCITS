@@ -266,6 +266,15 @@ namespace UIOperateInterleaverFinalTest
         private Dictionary<string, int> portAndPMDic = new Dictionary<string, int>();
 
         /// <summary>
+        /// 1×16 MPLUS 光开关：端口显示名 → 输出通道（与光路图一致）
+        /// </summary>
+        private static readonly Dictionary<string, int> SwitchPortChannelMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "L3-4", 1 }, { "L3-3", 2 }, { "L3-2", 3 }, { "L3-1", 4 },
+            { "L2-4", 5 }, { "L2-3", 6 }, { "L2-2", 7 }, { "L2-1", 8 },
+        };
+
+        /// <summary>
         /// 扫描功率计个数
         /// </summary>
         private int scanPowermeterCount = 2;
@@ -1163,6 +1172,7 @@ namespace UIOperateInterleaverFinalTest
                             //else
                             //assist.PMIndex = assist.PortIndex;
                             assist.TmptID = testInfos[i].EnvironmentID;
+                            assist.SwitchChannel = ResolveSwitchChannel(assist.Name, assist.Port);
                             portAssistant.Add(assist);
 
                             if (SWMaxPortFlag < Convert.ToInt32(assist.Port.Remove(0, 4)))
@@ -1182,6 +1192,8 @@ namespace UIOperateInterleaverFinalTest
                     curveShow.InitAllCurve(portNames);
                     curveShow.UpdateFre(minScanFre, maxScanFre);
                 }
+
+                SWMaxPortFlag = Math.Max(SWMaxPortFlag, 16);
 
                 ReadRefData(allProductControl.Count-1, portAssistant, ref errMsg);
                 ParamItemUpdate(allProductControl.Count-1,true);
@@ -1346,30 +1358,57 @@ namespace UIOperateInterleaverFinalTest
             }
         }
 
-        private void SetSwitch(int productIndex,string portName)
+        private int ResolveSwitchChannel(string portDisplayName, string portKey)
         {
-            string flagPort=portName.Replace(" ", "");
-            //flag最后一位用模板里port最大index，兼容产品两个port都是odd或者even的情况
-            string flag = productIndex.ToString()+"::" + flagPort.ToUpper() + ":"+ SWMaxPortFlag.ToString();
-            //RealtimeMsg("开始切换开关");
+            string nameKey = (portDisplayName ?? "").Replace(" ", "");
+            if (nameKey.Length > 0 && SwitchPortChannelMap.TryGetValue(nameKey, out int mapped))
+                return mapped;
+
+            string port = (portKey ?? "").Replace(" ", "").ToUpperInvariant();
+            if (port.StartsWith("PORT") && port.Length > 4 &&
+                int.TryParse(port.Substring(4), out int portNum) && portNum >= 1 && portNum <= 16)
+                return portNum;
+
+            return -1;
+        }
+
+        private int GetSwitchChannelForPort(int productIndex, string portKey)
+        {
+            foreach (PortAssist assist in portAssistant)
+            {
+                if (assist.ProductIndex == productIndex &&
+                    string.Equals(assist.Port, portKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (assist.SwitchChannel > 0)
+                        return assist.SwitchChannel;
+                    return ResolveSwitchChannel(assist.Name, assist.Port);
+                }
+            }
+            return ResolveSwitchChannel(null, portKey);
+        }
+
+        private void SetSwitch(int productIndex, string portKey)
+        {
+            int channel = GetSwitchChannelForPort(productIndex, portKey);
+            if (channel < 1 || channel > 16)
+            {
+                RealtimeMsg(string.Format("切换开关失败:无法解析端口 {0} 对应的开关通道(1-16)", portKey));
+                return;
+            }
+
+            string flag = productIndex.ToString() + "::" + channel.ToString() + ":" + SWMaxPortFlag.ToString();
             string errMsg = "";
             IOpticalSwitch opticalSwitch = null;
-            //if (DeviceControl.GetSwitchByType("InterleaverFinalTestSwitch", ref opticalSwitch, ref errMsg) == 0)
-            if (DeviceControl.GetSwitchByIndex(1, ref opticalSwitch, ref errMsg) == 0)            
+            if (DeviceControl.GetSwitchByIndex(1, ref opticalSwitch, ref errMsg) == 0)
             {
                 if (opticalSwitch != null)
                 {
                     if (opticalSwitch.SetSwitch(flag, ref errMsg) == 0)
-                    {
-                        RealtimeMsg("切换开关成功！");
-                    }
+                        RealtimeMsg(string.Format("切换开关成功！(通道 {0})", channel));
                 }
             }
             if (errMsg.Length > 0)
-            {
                 RealtimeMsg("切换开关失败:" + errMsg);
-                return;
-            }
         }
 
         
@@ -3429,10 +3468,17 @@ namespace UIOperateInterleaverFinalTest
         public string RawdataPath { get; set; }
 
         public string TmptID { get; set; }
+
+        /// <summary>
+        /// 1×16 光开关输出通道号 (1-16)
+        /// </summary>
+        public int SwitchChannel { get; set; }
+
         public PortAssist()
         {
             Name = "";
             Port = "";
+            SwitchChannel = -1;
             OperateIndex = -1;
             ProductIndex = -1;
             PortIndex = -1;

@@ -84,6 +84,8 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="ConfigPlugin.cs" />
+    <Compile Include="ConfigXmlParser.cs" />
+    <Compile Include="DeviceCatalogHelper.cs" />
     <Compile Include="ConfigMain.xaml.cs">
       <DependentUpon>ConfigMain.xaml</DependentUpon>
     </Compile>

@@ -31,6 +31,8 @@ namespace MolexUtility.Device
         PboxSwitch,
         [AdditionalAttribute("OMSSwitch")]
         OMSSwitch,
+        [AdditionalAttribute("MPLUSSwitch")]
+        MPLUSSwitch,
         [AdditionalAttribute("Automation")]
         Automation,
         [AdditionalAttribute("PDLController")]
