@@ -5,7 +5,7 @@ VisualStudioVersion = 17.14.37111.16 d17.14
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceControl", "DeviceControl\DeviceControl.csproj", "{44611614-7D7C-430D-831E-862D13BE8F13}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MolexUtility", "..\MolexUtility\MolexUtility\MolexUtility.csproj", "{72939F1A-9914-460F-9296-1B8097D5995A}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MolexUtility", "..\MolexUtility\MolexUtility.csproj", "{72939F1A-9914-460F-9296-1B8097D5995A}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

@@ -82,7 +82,7 @@
     </Reference>
     <Reference Include="USL.TAS, Version=1.0.0.5, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\..\..\..\CSharp\OCITS\library\MolexUtility\Debug\USL.TAS.dll</HintPath>
+      <HintPath>..\..\bin\common\USL.TAS.dll</HintPath>
     </Reference>
     <Reference Include="USL.TDB, Version=1.0.0.2, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>

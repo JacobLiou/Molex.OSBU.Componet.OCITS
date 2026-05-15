@@ -56,11 +56,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="PresentationCore" />
-    <Reference Include="PresentationFramework" />
-    <Reference Include="ProtocolAggregator">
-      <HintPath>..\..\bin\common\ProtocolAggregator.dll</HintPath>
-    </Reference>
-    <Reference Include="System" />
+    <Reference Include="PresentationFramework" /><Reference Include="System" />
     <Reference Include="System.ComponentModel.Composition" />
     <Reference Include="System.Core" />
     <Reference Include="System.Xml.Linq" />
@@ -80,11 +76,14 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\MolexUtility\MolexUtility\MolexUtility.csproj">
+    <ProjectReference Include="..\MolexUtility\MolexUtility.csproj">
       <Project>{72939f1a-9914-460f-9296-1b8097d5995a}</Project>
       <Name>MolexUtility</Name>
     </ProjectReference>
-  </ItemGroup>
+      <ProjectReference Include="..\ProtocolAggregator\ProtocolAggregator.csproj">
+      <Project>{86be453f-f9ac-466a-9787-03cf7178c536}</Project>
+      <Name>ProtocolAggregator</Name>
+    </ProjectReference></ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
        Other similar extension points exist, see Microsoft.Common.targets.

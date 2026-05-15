@@ -117,7 +117,7 @@
     </COMReference>
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\MolexUtility\MolexUtility\MolexUtility.csproj">
+    <ProjectReference Include="..\..\MolexUtility\MolexUtility.csproj">
       <Project>{72939f1a-9914-460f-9296-1b8097d5995a}</Project>
       <Name>MolexUtility</Name>
     </ProjectReference>

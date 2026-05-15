@@ -1,11 +1,13 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 14
-VisualStudioVersion = 14.0.25420.1
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.37111.16 d17.14
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OCITestSystem", "OCITestSystem\OCITestSystem.csproj", "{BD6A79BE-5CDA-41CE-B29C-70D024EEE221}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OCITestSystem", "OCITestSystem\OCITestSystem\OCITestSystem.csproj", "{BD6A79BE-5CDA-41CE-B29C-70D024EEE221}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MolexUtility", "..\..\library\MolexUtility\MolexUtility\MolexUtility.csproj", "{72939F1A-9914-460F-9296-1B8097D5995A}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MolexUtility", "..\library\MolexUtility\MolexUtility.csproj", "{72939F1A-9914-460F-9296-1B8097D5995A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OCITSAutoUpdate", "OCITSAutoUpdate\OCITSAutoUpdate\OCITSAutoUpdate.csproj", "{6A65DD68-020D-40C2-8FF1-3780DD6064A6}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -31,6 +33,14 @@ Global
 		{72939F1A-9914-460F-9296-1B8097D5995A}.Release|Any CPU.Build.0 = Release|Any CPU
 		{72939F1A-9914-460F-9296-1B8097D5995A}.Release|x86.ActiveCfg = Release|x86
 		{72939F1A-9914-460F-9296-1B8097D5995A}.Release|x86.Build.0 = Release|x86
+		{6A65DD68-020D-40C2-8FF1-3780DD6064A6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6A65DD68-020D-40C2-8FF1-3780DD6064A6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6A65DD68-020D-40C2-8FF1-3780DD6064A6}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{6A65DD68-020D-40C2-8FF1-3780DD6064A6}.Debug|x86.Build.0 = Debug|Any CPU
+		{6A65DD68-020D-40C2-8FF1-3780DD6064A6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6A65DD68-020D-40C2-8FF1-3780DD6064A6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6A65DD68-020D-40C2-8FF1-3780DD6064A6}.Release|x86.ActiveCfg = Release|Any CPU
+		{6A65DD68-020D-40C2-8FF1-3780DD6064A6}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

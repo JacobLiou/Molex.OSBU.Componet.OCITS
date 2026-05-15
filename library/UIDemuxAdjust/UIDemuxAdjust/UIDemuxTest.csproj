@@ -33,12 +33,12 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="MolexUtility">
-      <HintPath>..\..\..\bin\Debug\common\MolexUtility.dll</HintPath>
+      <HintPath>..\..\..\\bin\\common\\MolexUtility.dll</HintPath>
     </Reference>
     <Reference Include="PresentationCore" />
     <Reference Include="PresentationFramework" />
     <Reference Include="ProtocolAggregator">
-      <HintPath>..\..\..\bin\Debug\common\ProtocolAggregator.dll</HintPath>
+      <HintPath>..\..\..\\bin\\common\\ProtocolAggregator.dll</HintPath>
     </Reference>
     <Reference Include="System" />
     <Reference Include="System.ComponentModel.Composition" />

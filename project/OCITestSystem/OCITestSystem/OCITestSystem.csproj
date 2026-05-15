@@ -20,7 +20,7 @@
     <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
     <Optimize>false</Optimize>
-    <OutputPath>..\..\..\bin\debug\OCITestSystem\</OutputPath>
+    <OutputPath>..\..\..\bin\debug\</OutputPath>
     <DefineConstants>DEBUG;TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
@@ -30,7 +30,7 @@
     <PlatformTarget>x86</PlatformTarget>
     <DebugType>pdbonly</DebugType>
     <Optimize>true</Optimize>
-    <OutputPath>..\..\..\bin\Release\OCITestSystem\</OutputPath>
+    <OutputPath>..\..\..\bin\Release\</OutputPath>
     <DefineConstants>TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
@@ -58,14 +58,6 @@
     <Prefer32Bit>false</Prefer32Bit>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="MenuPluginInterface, Version=1.0.0.0, Culture=neutral, processorArchitecture=x86">
-      <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\..\..\bin\common\MenuPluginInterface.dll</HintPath>
-    </Reference>
-    <Reference Include="ProtocolAggregator, Version=1.0.0.0, Culture=neutral, processorArchitecture=x86">
-      <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\..\..\bin\common\ProtocolAggregator.dll</HintPath>
-    </Reference>
     <Reference Include="System" />
     <Reference Include="System.ComponentModel.Composition" />
     <Reference Include="System.Data" />
@@ -162,9 +154,17 @@
     </COMReference>
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\..\library\MolexUtility\MolexUtility\MolexUtility.csproj">
+    <ProjectReference Include="..\..\..\library\MolexUtility\MolexUtility.csproj">
       <Project>{72939f1a-9914-460f-9296-1b8097d5995a}</Project>
       <Name>MolexUtility</Name>
+    </ProjectReference>
+    <ProjectReference Include="..\..\..\library\MenuPluginInterface\MenuPluginInterface.csproj">
+      <Project>{0210e29a-b4c4-4b42-92d4-578c4f731486}</Project>
+      <Name>MenuPluginInterface</Name>
+    </ProjectReference>
+    <ProjectReference Include="..\..\..\library\ProtocolAggregator\ProtocolAggregator.csproj">
+      <Project>{86be453f-f9ac-466a-9787-03cf7178c536}</Project>
+      <Name>ProtocolAggregator</Name>
     </ProjectReference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
