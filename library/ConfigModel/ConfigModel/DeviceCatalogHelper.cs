@@ -34,7 +34,7 @@ namespace ConfigModel
                         d.ControlName.EndsWith("Switch", StringComparison.OrdinalIgnoreCase));
 
                 DeviceConfig mplus = template != null ? template.Clone() : CreateDefaultMplusSwitchTemplate();
-                mplus.ShowName = "MPLUS 1×16光开关";
+                mplus.ShowName = "MPLUS 1X16光开关";
                 mplus.ControlName = MplusSwitchType;
                 ClearControlValues(mplus);
                 allDeviceConfig[i].Add(mplus);
@@ -56,7 +56,7 @@ namespace ConfigModel
         private static DeviceConfig CreateDefaultMplusSwitchTemplate()
         {
             var cfg = new DeviceConfig();
-            cfg.ShowName = "MPLUS 1×16光开关";
+            cfg.ShowName = "MPLUS 1X16光开关";
             cfg.ControlName = Devices.MPLUSSwitch.GetAdditional();
             cfg.ControlKey[0] = "COM";
             cfg.ControlKey[1] = "波特率";

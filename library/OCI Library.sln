@@ -1,51 +1,53 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 14
-VisualStudioVersion = 14.0.23107.0
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.37111.16 d17.14
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MolexUtility", "MolexUtility\MolexUtility.csproj", "{72939F1A-9914-460F-9296-1B8097D5995A}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CommonAlgorithm", "..\CommonAlgorithm\CommonAlgorithm.csproj", "{A02C0A23-90D9-4984-AF15-6423185C3E11}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CommonAlgorithm", "CommonAlgorithm\CommonAlgorithm.csproj", "{A02C0A23-90D9-4984-AF15-6423185C3E11}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InterleaverAlgorithm", "..\InterleaverAlgorithm\InterleaverAlgorithm.csproj", "{1661D189-DB00-4B11-8CD7-B408BB882564}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InterleaverAlgorithm", "InterleaverAlgorithm\InterleaverAlgorithm.csproj", "{1661D189-DB00-4B11-8CD7-B408BB882564}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MenuPluginInterface", "..\MenuPluginInterface\MenuPluginInterface.csproj", "{0210E29A-B4C4-4B42-92D4-578C4F731486}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MenuPluginInterface", "MenuPluginInterface\MenuPluginInterface.csproj", "{0210E29A-B4C4-4B42-92D4-578C4F731486}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProtocolAggregator", "..\ProtocolAggregator\ProtocolAggregator.csproj", "{86BE453F-F9AC-466A-9787-03CF7178C536}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProtocolAggregator", "ProtocolAggregator\ProtocolAggregator.csproj", "{86BE453F-F9AC-466A-9787-03CF7178C536}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RealtimePower", "..\RealtimePower\RealtimePower.csproj", "{AAF422F7-1633-4734-8D31-71215BE37F46}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RealtimePower", "RealtimePower\RealtimePower.csproj", "{AAF422F7-1633-4734-8D31-71215BE37F46}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UICurve", "..\UICurve\UICurve.csproj", "{E1097C90-02E6-481B-BF1F-84726A0BE37B}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UICurve", "UICurve\UICurve.csproj", "{E1097C90-02E6-481B-BF1F-84726A0BE37B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIListCommon", "..\UIListCommon\UIListCommon.csproj", "{0A65011D-9AA0-4887-8573-9BD4C6D369E9}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIListCommon", "UIListCommon\UIListCommon.csproj", "{0A65011D-9AA0-4887-8573-9BD4C6D369E9}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIListInterleaver", "..\UIListInterleaver\UIListInterleaver.csproj", "{4309CDA1-B821-45B8-84F1-A012B5F5F0F5}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIListInterleaver", "UIListInterleaver\UIListInterleaver.csproj", "{4309CDA1-B821-45B8-84F1-A012B5F5F0F5}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIListMultiParam", "..\UIListMultiParam\UIListMultiParam.csproj", "{FA9E20E7-8418-49CF-B0B1-9172B67A230A}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIListMultiParam", "UIListMultiParam\UIListMultiParam.csproj", "{FA9E20E7-8418-49CF-B0B1-9172B67A230A}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIListSingleParam", "..\UIListSingleParam\UIListSingleParam.csproj", "{B2D79DB6-2486-4DF7-8DC2-808546B5DB8C}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIListSingleParam", "UIListSingleParam\UIListSingleParam.csproj", "{B2D79DB6-2486-4DF7-8DC2-808546B5DB8C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIOperate1X8", "..\UIOperate1X8\UIOperate1X8.csproj", "{C277CACE-5B69-4B00-AD40-B278E2CB5258}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIOperate1X8", "UIOperate1X8\UIOperate1X8.csproj", "{C277CACE-5B69-4B00-AD40-B278E2CB5258}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIOperateInterleaver", "..\UIOperateInterleaver\UIOperateInterleaver.csproj", "{35333E90-48A4-4256-8D13-9C6192F0C1ED}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIOperateInterleaver", "UIOperateInterleaver\UIOperateInterleaver.csproj", "{35333E90-48A4-4256-8D13-9C6192F0C1ED}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIRealTimeStatus", "..\UIRealTimeStatus\UIRealTimeStatus.csproj", "{1BC54358-47E5-4800-B054-C6DFF1AE49EC}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIRealTimeStatus", "UIRealTimeStatus\UIRealTimeStatus.csproj", "{1BC54358-47E5-4800-B054-C6DFF1AE49EC}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIOperateInterleaverFinalTest", "..\UIOperateInterleaverFinalTest\UIOperateInterleaverFinalTest\UIOperateInterleaverFinalTest.csproj", "{A1CD8723-D0C6-4C7A-BE89-69559CCF7111}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIOperateInterleaverFinalTest", "UIOperateInterleaverFinalTest\UIOperateInterleaverFinalTest\UIOperateInterleaverFinalTest.csproj", "{A1CD8723-D0C6-4C7A-BE89-69559CCF7111}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIDemuxAdjust", "..\UIDemuxAdjust\UIDemuxAdjust.csproj", "{63A4481F-F9F6-4502-B48F-5E256E2B24F5}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIDemuxAdjust", "UIDemuxAdjust\UIDemuxAdjust.csproj", "{63A4481F-F9F6-4502-B48F-5E256E2B24F5}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIDemuxTest", "..\UIDemuxTest\UIDemuxTest.csproj", "{1ECC727A-93A3-496C-B1E6-5D817B3DE4C5}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIDemuxTest", "UIDemuxTest\UIDemuxTest.csproj", "{1ECC727A-93A3-496C-B1E6-5D817B3DE4C5}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIListDemuxTest", "..\UIListDemuxTest\UIListDemuxTest.csproj", "{924FF600-4AEC-46DB-8027-E0123BB9A0FF}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIListDemuxTest", "UIListDemuxTest\UIListDemuxTest.csproj", "{924FF600-4AEC-46DB-8027-E0123BB9A0FF}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIListDemuxAdjust", "..\UIListDemuxAdjust\UIListDemuxAdjust.csproj", "{FB6B59A0-6F59-4661-A97C-D4920EC6F545}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIListDemuxAdjust", "UIListDemuxAdjust\UIListDemuxAdjust.csproj", "{FB6B59A0-6F59-4661-A97C-D4920EC6F545}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceControl", "..\DeviceControl\DeviceControl\DeviceControl.csproj", "{44611614-7D7C-430D-831E-862D13BE8F13}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceControl", "DeviceControl\DeviceControl\DeviceControl.csproj", "{44611614-7D7C-430D-831E-862D13BE8F13}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIOperateLLCCAdjust", "..\UIOperateLLCCAdjust\UIOperateLLCCAdjust.csproj", "{12B107D6-9955-4FD2-B198-DDC0803A2C92}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIOperateLLCCAdjust", "UIOperateLLCCAdjust\UIOperateLLCCAdjust.csproj", "{12B107D6-9955-4FD2-B198-DDC0803A2C92}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIOperateITLCD", "..\UIOperateITLCD\UIOperateITLCD.csproj", "{C86B5E18-2D3A-4CD4-9D59-82921B7A7921}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIOperateITLCD", "UIOperateITLCD\UIOperateITLCD.csproj", "{C86B5E18-2D3A-4CD4-9D59-82921B7A7921}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ConfigModel", "ConfigModel\ConfigModel\ConfigModel.csproj", "{1019AF39-10E6-49D0-9147-7726F33061A6}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -231,6 +233,14 @@ Global
 		{C86B5E18-2D3A-4CD4-9D59-82921B7A7921}.Release|Any CPU.Build.0 = Release|Any CPU
 		{C86B5E18-2D3A-4CD4-9D59-82921B7A7921}.Release|x86.ActiveCfg = Release|Any CPU
 		{C86B5E18-2D3A-4CD4-9D59-82921B7A7921}.Release|x86.Build.0 = Release|Any CPU
+		{1019AF39-10E6-49D0-9147-7726F33061A6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1019AF39-10E6-49D0-9147-7726F33061A6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1019AF39-10E6-49D0-9147-7726F33061A6}.Debug|x86.ActiveCfg = Debug|x86
+		{1019AF39-10E6-49D0-9147-7726F33061A6}.Debug|x86.Build.0 = Debug|x86
+		{1019AF39-10E6-49D0-9147-7726F33061A6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1019AF39-10E6-49D0-9147-7726F33061A6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1019AF39-10E6-49D0-9147-7726F33061A6}.Release|x86.ActiveCfg = Release|x86
+		{1019AF39-10E6-49D0-9147-7726F33061A6}.Release|x86.Build.0 = Release|x86
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

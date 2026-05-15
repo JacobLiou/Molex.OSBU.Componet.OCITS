@@ -10,6 +10,8 @@ namespace MolexUtility.Device
 {
     public class ConfigXmlParser
     {
+        private static readonly Encoding ConfigFileEncoding = Encoding.GetEncoding(936);
+
         public static void ParseConfig(string path,out List<string> deviceNameList,out List<List<DeviceConfig>> allDevice)
         {
             deviceNameList = null;
@@ -17,7 +19,7 @@ namespace MolexUtility.Device
             FileInfo configFileInfo = new FileInfo(path);
             if (configFileInfo.Exists == false)
                 return;
-            string xmlString = File.ReadAllText(path,Encoding.Default);
+            string xmlString = ReadConfigText(path);
             XmlDocument doc = new XmlDocument();
             doc.LoadXml(xmlString);
             //doc.Load(xmlString);
@@ -84,9 +86,16 @@ namespace MolexUtility.Device
                     AddNode(doc, subNode, allConfig[i]);
                 }
             }
-            string saveXml = doc.InnerXml; 
-            File.WriteAllText(path, saveXml,Encoding.UTF8);
-            //doc.Save(path);
+            string saveXml = doc.InnerXml;
+            File.WriteAllText(path, saveXml, ConfigFileEncoding);
+        }
+
+        private static string ReadConfigText(string path)
+        {
+            byte[] bytes = File.ReadAllBytes(path);
+            if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+                return Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3);
+            return ConfigFileEncoding.GetString(bytes);
         }
 
         private static void AddNode(XmlDocument xmlDoc,XmlNode parentNode, List<DeviceConfig> configList)
