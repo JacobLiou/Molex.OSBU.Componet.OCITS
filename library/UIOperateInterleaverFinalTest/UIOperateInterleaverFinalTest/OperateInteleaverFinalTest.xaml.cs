@@ -784,6 +784,52 @@ namespace UIOperateInterleaverFinalTest
             }
         }
 
+        /// <summary>
+        /// 根据 FusionControl 与扫描状态解析单个产品的列表状态。
+        /// </summary>
+        private ProductTestStatus ResolveProductStatus(int index)
+        {
+            if (index < 0 || index >= AllProducts.Count || index >= allProductControl.Count)
+            {
+                return ProductTestStatus.NotStarted;
+            }
+            if (AllProducts[index].HasScanError)
+            {
+                return ProductTestStatus.Error;
+            }
+            string errMsg = "";
+            if (!allProductControl[index].GetAllTestedPassed(ref errMsg))
+            {
+                return ProductTestStatus.Error;
+            }
+            bool hasData = allProductControl[index].GetHasTested();
+            bool scanningThis = !GetIsScanFinished() && CurProductIndex == index;
+            if (hasData || scanningThis)
+            {
+                return ProductTestStatus.Ok;
+            }
+            return ProductTestStatus.NotStarted;
+        }
+
+        private void UpdateProductStatuses()
+        {
+            for (int i = 0; i < AllProducts.Count; i++)
+            {
+                if (i >= allProductControl.Count)
+                {
+                    break;
+                }
+                ProductTestStatus status = ResolveProductStatus(i);
+                Brush newBrush = TestProductInfo.BrushFor(status);
+                TestProductInfo p = AllProducts[i];
+                if (p.Status != status || !ReferenceEquals(p.StatusBrush, newBrush))
+                {
+                    p.Status = status;
+                    p.StatusBrush = newBrush;
+                }
+            }
+        }
+
         private List<FusionControl> testShowControl = new List<FusionControl>();
         private void ParamItemUpdate(int productID, bool isOpenTemplate = false)
         {
@@ -792,6 +838,7 @@ namespace UIOperateInterleaverFinalTest
                 return;
             }
             UpdateResIcon();
+            UpdateProductStatuses();
             if (isOpenTemplate)
             {
                 List<int> deleteItems = new List<int>();
@@ -925,6 +972,7 @@ namespace UIOperateInterleaverFinalTest
                 curInfo.Index = AllProducts.Count+1;
                 curInfo.SN = UIControl.SN;
                 AllProducts.Add(curInfo);
+                UpdateProductStatuses();
                 //列表显示  
                 //曲线显示处理
                 List<MESTestInfo> testInfos = allProductControl[allProductControl.Count - 1].AllTestInfo;
@@ -1784,6 +1832,7 @@ namespace UIOperateInterleaverFinalTest
                 CommonFunction.WriteLog("Scan_DoWork begin");
                 scanDetailInfo = (ScanDetail)e.Argument;
                 CurProductIndex = scanDetailInfo.ProductIndex-1;
+                this.Dispatcher.Invoke(new Action(UpdateProductStatuses));
                 scanErrorMsg = "";
                 bool isFstpScan = true;
                 int res = 0;
@@ -2334,6 +2383,17 @@ namespace UIOperateInterleaverFinalTest
         /// <param name="e"></param>
         private void Scan_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
         {
+            if (CurProductIndex >= 0 && CurProductIndex < AllProducts.Count)
+            {
+                if (scanErrorMsg.Length > 0)
+                {
+                    AllProducts[CurProductIndex].HasScanError = true;
+                }
+                else
+                {
+                    AllProducts[CurProductIndex].HasScanError = false;
+                }
+            }
 
             //开始计算，处理PM2数据
             /*string errMsg = "";
@@ -2351,6 +2411,7 @@ namespace UIOperateInterleaverFinalTest
             }
 
             ScanFinish(scanDetailInfo);
+            UpdateProductStatuses();
         }
 
         /// <summary>
@@ -3244,10 +3305,99 @@ namespace UIOperateInterleaverFinalTest
        
     }
 
-    public class TestProductInfo
+    public enum ProductTestStatus
     {
+        NotStarted,
+        Ok,
+        Error
+    }
+
+    public class TestProductInfo : INotifyPropertyChanged
+    {
+        private static readonly SolidColorBrush BrushNotStarted = FreezeBrush(176, 176, 176);
+        private static readonly SolidColorBrush BrushOk = FreezeBrush(50, 205, 50);
+        private static readonly SolidColorBrush BrushError = FreezeBrush(255, 0, 0);
+
+        private static SolidColorBrush FreezeBrush(byte r, byte g, byte b)
+        {
+            var br = new SolidColorBrush(Color.FromRgb(r, g, b));
+            br.Freeze();
+            return br;
+        }
+
+        public static Brush BrushFor(ProductTestStatus status)
+        {
+            switch (status)
+            {
+                case ProductTestStatus.Ok:
+                    return BrushOk;
+                case ProductTestStatus.Error:
+                    return BrushError;
+                default:
+                    return BrushNotStarted;
+            }
+        }
+
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        private void NotifyPropertyChanged([CallerMemberName] string propertyName = null)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
         public string SN { get; set; }
         public int Index { get; set; }
+
+        private bool hasScanError;
+        public bool HasScanError
+        {
+            get { return hasScanError; }
+            set
+            {
+                if (hasScanError == value)
+                {
+                    return;
+                }
+                hasScanError = value;
+                NotifyPropertyChanged();
+            }
+        }
+
+        private ProductTestStatus status = ProductTestStatus.NotStarted;
+        public ProductTestStatus Status
+        {
+            get { return status; }
+            set
+            {
+                if (status == value)
+                {
+                    return;
+                }
+                status = value;
+                NotifyPropertyChanged();
+            }
+        }
+
+        private Brush statusBrush = BrushNotStarted;
+        public Brush StatusBrush
+        {
+            get { return statusBrush; }
+            set
+            {
+                if (ReferenceEquals(statusBrush, value))
+                {
+                    return;
+                }
+                statusBrush = value;
+                NotifyPropertyChanged();
+            }
+        }
+
+        public TestProductInfo()
+        {
+            status = ProductTestStatus.NotStarted;
+            statusBrush = BrushNotStarted;
+        }
     }
 
     public class PortAssist

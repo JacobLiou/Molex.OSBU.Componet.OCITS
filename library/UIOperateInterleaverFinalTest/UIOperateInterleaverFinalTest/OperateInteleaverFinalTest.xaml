@@ -60,6 +60,13 @@
                     <ListView.View>
                         <GridView>
                             <GridViewColumn Header="" Width="20" DisplayMemberBinding="{Binding Index}"/>
+                            <GridViewColumn Header="状态" Width="28">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Ellipse Width="12" Height="12" Fill="{Binding StatusBrush}" Margin="4,0"/>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
                             <GridViewColumn Header="测试列表" Width="80" DisplayMemberBinding="{Binding SN}"/>
                         </GridView>
                     </ListView.View>
