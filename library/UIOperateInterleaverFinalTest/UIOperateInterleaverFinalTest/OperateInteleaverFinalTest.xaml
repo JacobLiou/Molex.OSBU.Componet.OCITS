@@ -56,21 +56,25 @@
                     <TextBlock Text="烤温倒计时:"  FontSize="14" VerticalAlignment="Bottom" HorizontalAlignment="Right"/>
                     <TextBlock Name="TemptRemainTime" Text="00:00:00"  FontWeight="Black" FontSize="14" VerticalAlignment="Center" HorizontalAlignment="Right"/>
                 </StackPanel>
-                <ListView Name="listSNs" Grid.Row="1" Grid.RowSpan="6" Grid.Column="3" ItemsSource="{Binding}" FontSize="14" Margin="2,2,2,2">
-                    <ListView.View>
-                        <GridView>
-                            <GridViewColumn Header="" Width="20" DisplayMemberBinding="{Binding Index}"/>
-                            <GridViewColumn Header="状态" Width="28">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <Ellipse Width="12" Height="12" Fill="{Binding StatusBrush}" Margin="4,0"/>
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
-                            <GridViewColumn Header="测试列表" Width="80" DisplayMemberBinding="{Binding SN}"/>
-                        </GridView>
-                    </ListView.View>
-                </ListView>
+                <ScrollViewer Grid.Row="1" Grid.RowSpan="6" Grid.Column="3" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <ListView Name="listSNs" ItemsSource="{Binding}" FontSize="13" Margin="2" MinHeight="120" MaxHeight="420">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="#" Width="24" DisplayMemberBinding="{Binding Index}"/>
+                                <GridViewColumn Header="状态" Width="32">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Ellipse Width="12" Height="12" Fill="{Binding StatusBrush}" Margin="4,0"/>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <GridViewColumn Header="SN (最多16)" Width="110" DisplayMemberBinding="{Binding SN}"/>
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+                </ScrollViewer>
+                <Button Grid.Row="0" Grid.Column="3" Name="btnBatchOpenTemplate" Content="批量打开SN" ToolTip="每行一个SN，最多16个，需同Spec"
+                        Margin="2" FontSize="12" Click="btnBatchOpenTemplate_Click" VerticalAlignment="Bottom"/>
 
             </Grid>
         </GroupBox>

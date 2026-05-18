@@ -272,6 +272,8 @@ namespace UIOperateInterleaverFinalTest
         {
             { "L3-4", 1 }, { "L3-3", 2 }, { "L3-2", 3 }, { "L3-1", 4 },
             { "L2-4", 5 }, { "L2-3", 6 }, { "L2-2", 7 }, { "L2-1", 8 },
+            { "L1-4", 9 }, { "L1-3", 10 }, { "L1-2", 11 }, { "L1-1", 12 },
+            { "L4-4", 13 }, { "L4-3", 14 }, { "L4-2", 15 }, { "L4-1", 16 },
         };
 
         /// <summary>
@@ -317,6 +319,11 @@ namespace UIOperateInterleaverFinalTest
         /// 一起扫描的端口号
         /// </summary>
         private List<List<int>> _scanList = new List<List<int>>();
+
+        /// <summary>
+        /// 批量打开模板时待处理的 SN 队列
+        /// </summary>
+        private Queue<string> batchSnQueue;
 
         public delegate void GetUDLMessageDelegate(ref string msg, ref bool isSuccess);
 
@@ -660,6 +667,85 @@ namespace UIOperateInterleaverFinalTest
             MessageBox.Show(error, "出错", MessageBoxButton.OK, MessageBoxImage.Error);
         }
 
+        private void btnBatchOpenTemplate_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new Window
+            {
+                Title = "批量打开 SN（每行一个，最多16个）",
+                Width = 380,
+                Height = 320,
+                WindowStartupLocation = WindowStartupLocation.CenterScreen,
+                ResizeMode = ResizeMode.NoResize
+            };
+            var panel = new StackPanel { Margin = new Thickness(10) };
+            panel.Children.Add(new TextBlock
+            {
+                Text = "请输入 SN，每行一个。须与已加载产品同 Spec。",
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 6)
+            });
+            var input = new TextBox
+            {
+                AcceptsReturn = true,
+                Height = 180,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+            };
+            panel.Children.Add(input);
+            var buttons = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Margin = new Thickness(0, 8, 0, 0)
+            };
+            bool confirmed = false;
+            var okBtn = new Button { Content = "确定", Width = 72, Margin = new Thickness(4, 0, 0, 0) };
+            var cancelBtn = new Button { Content = "取消", Width = 72, Margin = new Thickness(4, 0, 0, 0) };
+            okBtn.Click += (s, args) => { confirmed = true; dialog.Close(); };
+            cancelBtn.Click += (s, args) => dialog.Close();
+            buttons.Children.Add(okBtn);
+            buttons.Children.Add(cancelBtn);
+            panel.Children.Add(buttons);
+            dialog.Content = panel;
+            dialog.ShowDialog();
+            if (!confirmed)
+                return;
+
+            string[] lines = input.Text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            batchSnQueue = new Queue<string>();
+            foreach (string line in lines)
+            {
+                string sn = (line ?? "").Trim().ToUpperInvariant();
+                if (sn.Length == 0)
+                    continue;
+                if (batchSnQueue.Count >= OpticalSwitchConfigNames.MaxProductsSinglePort)
+                {
+                    WarningBox(string.Format("最多批量打开 {0} 个 SN，超出部分已忽略。",
+                        OpticalSwitchConfigNames.MaxProductsSinglePort));
+                    break;
+                }
+                batchSnQueue.Enqueue(sn);
+            }
+            if (batchSnQueue.Count == 0)
+            {
+                WarningBox("未输入有效 SN。");
+                batchSnQueue = null;
+                return;
+            }
+            TryOpenNextBatchSn();
+        }
+
+        private void TryOpenNextBatchSn()
+        {
+            if (batchSnQueue == null || batchSnQueue.Count == 0)
+            {
+                batchSnQueue = null;
+                RealtimeMsg("批量打开 SN 完成。");
+                return;
+            }
+            UIControl.SN = batchSnQueue.Dequeue();
+            btnOpenTemplate_Click(this, new RoutedEventArgs());
+        }
+
         private void btnOpenTemplate_Click(object sender, RoutedEventArgs e)
         {
             string errMsg = "";
@@ -693,7 +779,21 @@ namespace UIOperateInterleaverFinalTest
 
             if (allProductControl.Count >= 8 && portAndNameDic.Count == 2)
             {
-                ErrorBox("该工位最多支持测试8个3端口产品！");
+                ErrorBox("该工位最多支持测试8个双端口产品！");
+                return;
+            }
+
+            if (allProductControl.Count >= OpticalSwitchConfigNames.MaxProductsSinglePort && portAndNameDic.Count == 1)
+            {
+                ErrorBox(string.Format("该工位最多支持测试{0}个单端口产品！", OpticalSwitchConfigNames.MaxProductsSinglePort));
+                return;
+            }
+
+            if (portAndNameDic.Count > 0 &&
+                (allProductControl.Count + 1) * portAndNameDic.Count > OpticalSwitchConfigNames.MaxSwitchChannels)
+            {
+                ErrorBox(string.Format("产品数×端口数不能超过{0}（当前将超出开关通道容量）！",
+                    OpticalSwitchConfigNames.MaxSwitchChannels));
                 return;
             }
             portRawdatas.Clear();
@@ -1149,8 +1249,14 @@ namespace UIOperateInterleaverFinalTest
                             else
                                 assist.OperateIndex = assist.ProductIndex * portAndNameDic.Count + assist.PortIndex - 1;
 
-                            //if (assist.PortIndex > 2)
-                                assist.PMIndex = portAndPMDic[assist.PortIndex.ToString()];
+                            int pmIndex;
+                            string pmMapErr = "";
+                            if (!TryGetPmIndexForPort(assist.PortIndex, out pmIndex, ref pmMapErr))
+                            {
+                                errMsg += pmMapErr + "\r";
+                                continue;
+                            }
+                            assist.PMIndex = pmIndex;
 
                             //决定了一起扫描的端口
                             if (_scanList.Count>0)
@@ -1172,7 +1278,8 @@ namespace UIOperateInterleaverFinalTest
                             //else
                             //assist.PMIndex = assist.PortIndex;
                             assist.TmptID = testInfos[i].EnvironmentID;
-                            assist.SwitchChannel = ResolveSwitchChannel(assist.Name, assist.Port);
+                            int switchChannel = ResolveSwitchChannel(assist.Name, assist.Port);
+                            assist.SwitchChannel = ApplySinglePortSlotChannelMapping(assist.ProductIndex, switchChannel);
                             portAssistant.Add(assist);
 
                             if (SWMaxPortFlag < Convert.ToInt32(assist.Port.Remove(0, 4)))
@@ -1193,7 +1300,7 @@ namespace UIOperateInterleaverFinalTest
                     curveShow.UpdateFre(minScanFre, maxScanFre);
                 }
 
-                SWMaxPortFlag = Math.Max(SWMaxPortFlag, 16);
+                SWMaxPortFlag = Math.Max(SWMaxPortFlag, OpticalSwitchConfigNames.MaxSwitchChannels);
 
                 ReadRefData(allProductControl.Count-1, portAssistant, ref errMsg);
                 ParamItemUpdate(allProductControl.Count-1,true);
@@ -1205,9 +1312,12 @@ namespace UIOperateInterleaverFinalTest
 
                 ShowTmpltPath();
 
+                if (batchSnQueue != null && batchSnQueue.Count > 0)
+                    TryOpenNextBatchSn();
             }
             else
             {
+                batchSnQueue = null;
                 RealtimeMsg(errMsg, StatusType.Error);
                 ErrorBox(errMsg);
                 return;
@@ -1366,10 +1476,27 @@ namespace UIOperateInterleaverFinalTest
 
             string port = (portKey ?? "").Replace(" ", "").ToUpperInvariant();
             if (port.StartsWith("PORT") && port.Length > 4 &&
-                int.TryParse(port.Substring(4), out int portNum) && portNum >= 1 && portNum <= 16)
+                int.TryParse(port.Substring(4), out int portNum) &&
+                portNum >= 1 && portNum <= OpticalSwitchConfigNames.MaxSwitchChannels)
                 return portNum;
 
             return -1;
+        }
+
+        /// <summary>
+        /// 16 SN×1 路：多产品且每 SN 仅 1 逻辑端口时，PORT1 映射到工位槽位（ProductIndex）。
+        /// </summary>
+        private int ApplySinglePortSlotChannelMapping(int productIndex, int channelFromPort)
+        {
+            if (productIndex < 1 || allProductControl.Count <= 1 || portAndNameDic.Count != 1)
+                return channelFromPort;
+
+            if (channelFromPort == 1)
+                return productIndex;
+            if (channelFromPort >= 1 && channelFromPort <= OpticalSwitchConfigNames.MaxSwitchChannels)
+                return channelFromPort;
+
+            return productIndex;
         }
 
         private int GetSwitchChannelForPort(int productIndex, string portKey)
@@ -1381,18 +1508,32 @@ namespace UIOperateInterleaverFinalTest
                 {
                     if (assist.SwitchChannel > 0)
                         return assist.SwitchChannel;
-                    return ResolveSwitchChannel(assist.Name, assist.Port);
+                    int channel = ResolveSwitchChannel(assist.Name, assist.Port);
+                    return ApplySinglePortSlotChannelMapping(productIndex, channel);
                 }
             }
-            return ResolveSwitchChannel(null, portKey);
+            int fallback = ResolveSwitchChannel(null, portKey);
+            return ApplySinglePortSlotChannelMapping(productIndex, fallback);
+        }
+
+        private bool TryGetPmIndexForPort(int portIndex, out int pmIndex, ref string errMsg)
+        {
+            pmIndex = 0;
+            string key = portIndex.ToString();
+            if (portAndPMDic.TryGetValue(key, out pmIndex))
+                return true;
+
+            errMsg = string.Format("端口 PORT{0} 未配置功率计映射，请在模板 CFG 的 GROUP 中设置（例如 PORT{0}:PM1）。", portIndex, portIndex);
+            return false;
         }
 
         private void SetSwitch(int productIndex, string portKey)
         {
             int channel = GetSwitchChannelForPort(productIndex, portKey);
-            if (channel < 1 || channel > 16)
+            if (channel < 1 || channel > OpticalSwitchConfigNames.MaxSwitchChannels)
             {
-                RealtimeMsg(string.Format("切换开关失败:无法解析端口 {0} 对应的开关通道(1-16)", portKey));
+                RealtimeMsg(string.Format("切换开关失败:无法解析端口 {0} 对应的开关通道(1-{1})",
+                    portKey, OpticalSwitchConfigNames.MaxSwitchChannels));
                 return;
             }
 
@@ -1407,7 +1548,7 @@ namespace UIOperateInterleaverFinalTest
             if (opticalSwitch != null)
             {
                 if (opticalSwitch.SetSwitch(flag, ref errMsg) == 0)
-                    RealtimeMsg(string.Format("切换开关成功！(通道 {0})", channel));
+                    RealtimeMsg(string.Format("切换开关成功！(产品{0} 通道{1} flag={2})", productIndex, channel, flag));
             }
             if (errMsg.Length > 0)
                 RealtimeMsg("切换开关失败:" + errMsg);
@@ -1564,7 +1705,9 @@ namespace UIOperateInterleaverFinalTest
 
                 if (scanInfo.ScanType == SCANTYPE.RefWithPDL)
                 {
-                    int pmIndex = portAndPMDic[scanInfo.Ports[0].ToString()];
+                    int pmIndex;
+                    if (!TryGetPmIndexForPort(scanInfo.Ports[0], out pmIndex, ref errMsg))
+                        return 2;
                     string pdlRefPath = string.Format("{0}-product{1}-port{2}.csv", refWithPDLFile, CurProductIndex + 1, scanInfo.Ports[0]);
 
 
@@ -1592,7 +1735,9 @@ namespace UIOperateInterleaverFinalTest
                     {
                         for (int j = 0; j < scanInfo.Ports.Count; j++)
                         {
-                            int pmIndex = portAndPMDic[scanInfo.Ports[j].ToString()];
+                            int pmIndex;
+                            if (!TryGetPmIndexForPort(scanInfo.Ports[j], out pmIndex, ref errMsg))
+                                return 2;
                             int dataIndex = (scanInfo.ProductIndex - 1) * portAndNameDic.Count + scanInfo.Ports[j] - 1;
 
                             string path = scanWithPDLFile + pmIndex.ToString() + ".csv";
@@ -1661,7 +1806,9 @@ namespace UIOperateInterleaverFinalTest
                 }
                 if (scanInfo.ScanType == SCANTYPE.RefWithPDL)
                 {
-                    int pmIndex = portAndPMDic[scanInfo.Ports[0].ToString()];
+                    int pmIndex;
+                    if (!TryGetPmIndexForPort(scanInfo.Ports[0], out pmIndex, ref errMsg))
+                        return 2;
                     
                     //读取四个偏振态下原始数据
                     for (int i = 0; i < 4; i++)
@@ -1695,7 +1842,9 @@ namespace UIOperateInterleaverFinalTest
                     {
                         for (int j = 0; j < scanInfo.Ports.Count; j++)
                         {
-                            int pmIndex = portAndPMDic[scanInfo.Ports[j].ToString()];
+                            int pmIndex;
+                            if (!TryGetPmIndexForPort(scanInfo.Ports[j], out pmIndex, ref errMsg))
+                                return 2;
                             int dataIndex = (scanInfo.ProductIndex - 1) * portAndNameDic.Count + scanInfo.Ports[j] - 1;
                             //读取四个偏振态下原始数据
                             for (int i = 0; i < 4; i++)
