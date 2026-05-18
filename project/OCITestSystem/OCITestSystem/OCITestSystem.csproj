@@ -154,6 +154,12 @@
     </COMReference>
   </ItemGroup>
   <ItemGroup>
+    <Content Include="..\..\..\switch\interleaverSwitch-MPLUS">
+      <Link>switch\interleaverSwitch-MPLUS</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\..\library\MolexUtility\MolexUtility.csproj">
       <Project>{72939f1a-9914-460f-9296-1b8097d5995a}</Project>
       <Name>MolexUtility</Name>

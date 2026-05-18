@@ -1399,13 +1399,15 @@ namespace UIOperateInterleaverFinalTest
             string flag = productIndex.ToString() + "::" + channel.ToString() + ":" + SWMaxPortFlag.ToString();
             string errMsg = "";
             IOpticalSwitch opticalSwitch = null;
-            if (DeviceControl.GetSwitchByIndex(1, ref opticalSwitch, ref errMsg) == 0)
+            if (DeviceControl.GetSwitchByType(OpticalSwitchConfigNames.InterleaverMplus1X16, ref opticalSwitch, ref errMsg) != 0)
             {
-                if (opticalSwitch != null)
-                {
-                    if (opticalSwitch.SetSwitch(flag, ref errMsg) == 0)
-                        RealtimeMsg(string.Format("切换开关成功！(通道 {0})", channel));
-                }
+                errMsg = "";
+                DeviceControl.GetSwitchByIndex(1, ref opticalSwitch, ref errMsg);
+            }
+            if (opticalSwitch != null)
+            {
+                if (opticalSwitch.SetSwitch(flag, ref errMsg) == 0)
+                    RealtimeMsg(string.Format("切换开关成功！(通道 {0})", channel));
             }
             if (errMsg.Length > 0)
                 RealtimeMsg("切换开关失败:" + errMsg);

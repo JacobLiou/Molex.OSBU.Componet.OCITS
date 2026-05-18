@@ -11,7 +11,8 @@ namespace ConfigModel
     /// </summary>
     internal static class DeviceCatalogHelper
     {
-        private const string MplusSwitchType = "MPLUSSwitch";
+        private const string MplusSwitchType = OpticalSwitchConfigNames.MplusSwitchType;
+        private const string MplusSwitchShowName = OpticalSwitchConfigNames.InterleaverMplus1X16;
 
         public static void EnsureMplusSwitchInCatalog(List<string> deviceNameList, List<List<DeviceConfig>> allDeviceConfig)
         {
@@ -34,7 +35,7 @@ namespace ConfigModel
                         d.ControlName.EndsWith("Switch", StringComparison.OrdinalIgnoreCase));
 
                 DeviceConfig mplus = template != null ? template.Clone() : CreateDefaultMplusSwitchTemplate();
-                mplus.ShowName = "MPLUS 1X16光开关";
+                mplus.ShowName = MplusSwitchShowName;
                 mplus.ControlName = MplusSwitchType;
                 ClearControlValues(mplus);
                 allDeviceConfig[i].Add(mplus);
@@ -53,10 +54,30 @@ namespace ConfigModel
                  d.ControlName.IndexOf("Switch", StringComparison.OrdinalIgnoreCase) >= 0));
         }
 
+        public static void NormalizeMplusSwitchShowName(List<List<DeviceConfig>> deviceConfigs)
+        {
+            if (deviceConfigs == null)
+                return;
+
+            foreach (List<DeviceConfig> devices in deviceConfigs)
+            {
+                if (devices == null)
+                    continue;
+                foreach (DeviceConfig cfg in devices)
+                {
+                    if (cfg == null ||
+                        !MplusSwitchType.Equals(cfg.ControlName, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (!MplusSwitchShowName.Equals(cfg.ShowName, StringComparison.OrdinalIgnoreCase))
+                        cfg.ShowName = MplusSwitchShowName;
+                }
+            }
+        }
+
         private static DeviceConfig CreateDefaultMplusSwitchTemplate()
         {
             var cfg = new DeviceConfig();
-            cfg.ShowName = "MPLUS 1X16光开关";
+            cfg.ShowName = MplusSwitchShowName;
             cfg.ControlName = Devices.MPLUSSwitch.GetAdditional();
             cfg.ControlKey[0] = "COM";
             cfg.ControlKey[1] = "波特率";

@@ -78,6 +78,7 @@ namespace ConfigModel
                 
                 //读取当前配置设备的配置文件
                 ConfigXmlParser.ParseConfig(deviceConfigPath, out useNameList, out allConfigInfo);
+                DeviceCatalogHelper.NormalizeMplusSwitchShowName(allConfigInfo);
                 if (allDeviceConfig == null)
                     return;
 

@@ -97,6 +97,7 @@
     <Compile Include="Command\CustomCommand.cs" />
     <Compile Include="CommonFunction.cs" />
     <Compile Include="Device\ConfigXmlParser.cs" />
+    <Compile Include="Device\OpticalSwitchConfigNames.cs" />
     <Compile Include="Device\Devices.cs" />
     <Compile Include="Device\IAutomation.cs" />
     <Compile Include="Device\ICDScan.cs" />

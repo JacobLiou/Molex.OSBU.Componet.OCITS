@@ -146,6 +146,7 @@ namespace DeviceControl
                 List<string> useNameList;
                 //读取当前配置设备的配置文件
                 ConfigXmlParser.ParseConfig(System.Environment.CurrentDirectory + "\\set\\Deviceconfig.xml", out useNameList, out usedDeviceConfigs);
+                OpticalSwitchConfigNames.NormalizeMplusSwitchShowName(usedDeviceConfigs);
                 if (usedDeviceConfigs == null)
                 {
                     errMsg = "设备初始化 error:" + "未配置任何设备" + "\r";
