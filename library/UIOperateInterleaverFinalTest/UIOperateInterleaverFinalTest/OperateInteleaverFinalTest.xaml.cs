@@ -410,6 +410,14 @@ namespace UIOperateInterleaverFinalTest
             refTimeCheckBK.ProgressChanged += RefTimeCheck_Progress;
             refTimeCheckBK.WorkerSupportsCancellation = true;
             refTimeCheckBK.WorkerReportsProgress = true;
+
+            // TMS GDS：DLL 提供 UploadTestSystemCalibrationTime 后可去掉 Hook；产线正式跑建议 AllowSkip=false
+            // FusionControl.AllowSkipUploadRefCalibrationTimeWhenNotImplemented = false;
+            // FusionControl.UploadRefCalibrationTimeHook = (userId, ref err) =>
+            // {
+            //     var tas = new USLTASLibrary.USLTASLibraryInterface();
+            //     return tas.UploadTestSystemCalibrationTime(userId, ref err);
+            // };
         }
 
         public static bool GetMessage(ref string msg)
@@ -762,18 +770,23 @@ namespace UIOperateInterleaverFinalTest
             errMsg = string.Format("goldsampleSN:{0},userID:{1}", strGoldsampleSN, mainInfo.UserID);
             RealtimeMsg(errMsg);
             errMsg = "";
-            
-            if (!FusionControl.GoldsampleCheck(strGoldsampleSN, mainInfo.UserID, "", ref errMsg))
+
+            if (UIControl.SN != null && UIControl.SN.Length == 0)
+            {
+                WarningBox("请输入产品号！！");
+                return;
+            }
+
+            if (!FusionControl.TryVerifyWorkStationForOpenTemplate(strGoldsampleSN, UIControl.SN, mainInfo.UserID, "", ref errMsg))
             {
                 string errPrmpt = string.Format("Goldsample验证失败{0}:{1}", strGoldsampleSN, errMsg);
                 MessageBox.Show(errPrmpt, "错误", MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
 
             }
-            if (UIControl.SN != null && UIControl.SN.Length == 0)
+            if (FusionControl.IsGdsGoldenSampleProduct(UIControl.SN))
             {
-                WarningBox("请输入产品号！！");
-                return;
+                RealtimeMsg("GDS 金样：已跳过工位 Golden Sample 校验，直接打开模板。");
             }
             if (mainInfo == null)
             {
@@ -1439,6 +1452,23 @@ namespace UIOperateInterleaverFinalTest
                     string errMsg = "";
                     MessageBox.Show("归零完成！");
                     ReadRefData(allProductControl.Count - 1, portAssistant, ref errMsg);
+                    if (errMsg.Length > 0)
+                    {
+                        WarningBox(errMsg);
+                        break;
+                    }
+                    string uploadRefErr = "";
+                    if (!FusionControl.UploadRefCalibrationTime(mainInfo.UserID, ref uploadRefErr))
+                    {
+                        ErrorBox("上传归零时间到 TMS 失败：" + uploadRefErr);
+                        UIControl.IsScanEnable = false;
+                        UIControl.IsReferenceEnable = true;
+                        break;
+                    }
+                    if (!string.IsNullOrEmpty(uploadRefErr) && uploadRefErr.Contains("AllowSkipUploadRefCalibrationTimeWhenNotImplemented"))
+                        RealtimeMsg(uploadRefErr, StatusType.Error);
+                    else
+                        RealtimeMsg("归零时间已上传 TMS。");
                     break;
                 }
                 //只需要对一个温度进行归零即可

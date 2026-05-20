@@ -7,6 +7,7 @@ using System.IO;
 using System.Runtime.Serialization.Formatters.Binary;
 using System.Xml;
 using System.Runtime.InteropServices;
+using System.Reflection;
 
 namespace MolexUtility
 {
@@ -281,6 +282,131 @@ namespace MolexUtility
             USLTASLibraryInterface tas = new USLTASLibraryInterface();
             bool bCheckPass = tas.TriggerWorkStationVerify(goldSampleSN, userID, type, ref errMsg);
             return bCheckPass;
+        }
+
+        /// <summary>
+        /// TMS GDS 金样产品 SN 标记（与 C++ strSN.Find("GDSM") 一致：含 GDSM 则跳过工位校验）。
+        /// </summary>
+        public const string GdsGoldenSampleSnMarker = "GDSM";
+
+        /// <summary>
+        /// 是否为 GDS 金样流程产品（无需 TriggerWorkStationVerify）。
+        /// </summary>
+        public static bool IsGdsGoldenSampleProduct(string productSn)
+        {
+            return !string.IsNullOrEmpty(productSn)
+                && productSn.IndexOf(GdsGoldenSampleSnMarker, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>
+        /// 打开模板前是否需做工位 Golden Sample / 技能校验。
+        /// </summary>
+        public static bool ShouldVerifyWorkStationForOpenTemplate(string productSn)
+        {
+            return !IsGdsGoldenSampleProduct(productSn);
+        }
+
+        /// <summary>
+        /// 工位校验：非 GDSM 走 ITasCommLib.TriggerWorkStationVerify；GDSM 直接通过。
+        /// </summary>
+        public static bool TryVerifyWorkStationForOpenTemplate(string goldSampleWorkStationId, string productSn, string userID, string verifyType, ref string errMsg)
+        {
+            errMsg = "";
+            if (!ShouldVerifyWorkStationForOpenTemplate(productSn))
+            {
+                CommonFunction.WriteLog(string.Format("[TMS GDS] SN={0} 跳过 TriggerWorkStationVerify。", productSn));
+                return true;
+            }
+            return GoldsampleCheck(goldSampleWorkStationId, userID, verifyType, ref errMsg);
+        }
+
+        /// <summary>
+        /// 归零完成后上传校准时间到 TMS（C++ UploadTestSystemCailbrationTime）。
+        /// 当前 ITasCommLib 截图无此方法：优先走 Hook；其次反射 DLL；均未实现时由 <see cref="AllowSkipUploadRefCalibrationTimeWhenNotImplemented"/> 决定是否放行。
+        /// 预期签名：bool UploadTestSystemCalibrationTime(string userId, ref string errMsg)
+        /// </summary>
+        public static Func<string, string, bool> UploadRefCalibrationTimeHook { get; set; }
+
+        /// <summary>
+        /// true：DLL/Hook 未对接时仅写日志并视为成功（联调用）；false：未对接则返回失败。
+        /// </summary>
+        public static bool AllowSkipUploadRefCalibrationTimeWhenNotImplemented { get; set; } = true;
+
+        public static bool UploadRefCalibrationTime(string userID, ref string errMsg)
+        {
+            errMsg = "";
+            if (string.IsNullOrWhiteSpace(userID))
+            {
+                errMsg = "用户工号为空，无法上传归零时间。";
+                return false;
+            }
+
+            if (UploadRefCalibrationTimeHook != null)
+                return UploadRefCalibrationTimeHook(userID, ref errMsg);
+
+            if (TryInvokeUploadRefCalibrationTimeViaTas(userID, ref errMsg))
+                return true;
+
+            string stubMsg = "ITasCommLib 未导出 UploadTestSystemCalibrationTime（或 UploadTestSystemCailbrationTime）。" +
+                "请在 FusionControl.UploadRefCalibrationTimeHook 中对接，或升级 USL.TAS.dll。";
+            CommonFunction.WriteLog("[TMS GDS] " + stubMsg);
+            if (AllowSkipUploadRefCalibrationTimeWhenNotImplemented)
+            {
+                errMsg = stubMsg + "（当前 AllowSkipUploadRefCalibrationTimeWhenNotImplemented=true，已跳过上传。）";
+                return true;
+            }
+            errMsg = stubMsg;
+            return false;
+        }
+
+        private static bool TryInvokeUploadRefCalibrationTimeViaTas(string userID, ref string errMsg)
+        {
+            errMsg = "";
+            try
+            {
+                USLTASLibraryInterface tas = new USLTASLibraryInterface();
+                Type tasType = tas.GetType();
+                MethodInfo method = tasType.GetMethod("UploadTestSystemCalibrationTime", BindingFlags.Instance | BindingFlags.Public)
+                    ?? tasType.GetMethod("UploadTestSystemCailbrationTime", BindingFlags.Instance | BindingFlags.Public);
+                if (method == null)
+                    return false;
+
+                ParameterInfo[] ps = method.GetParameters();
+                object[] args;
+                if (ps.Length == 1)
+                {
+                    args = new object[] { userID };
+                }
+                else if (ps.Length == 2)
+                {
+                    args = new object[] { userID, "" };
+                }
+                else
+                {
+                    errMsg = "UploadTestSystemCalibrationTime 参数个数不支持：" + ps.Length;
+                    return false;
+                }
+
+                object result = method.Invoke(tas, args);
+                if (ps.Length == 2 && args[1] is string outMsg)
+                    errMsg = outMsg ?? "";
+
+                if (result is bool b)
+                    return b;
+                if (result is int n)
+                    return n >= 0;
+                return false;
+            }
+            catch (TargetInvocationException tex)
+            {
+                errMsg = tex.InnerException != null ? tex.InnerException.Message : tex.Message;
+                return false;
+            }
+            catch (Exception ex)
+            {
+                errMsg = ex.Message;
+                return false;
+            }
         }
 
         public string GetOplinkProcess(string PN,string process,ref string errMsg)
