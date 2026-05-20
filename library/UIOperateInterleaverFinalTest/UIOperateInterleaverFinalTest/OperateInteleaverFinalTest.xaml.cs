@@ -325,6 +325,11 @@ namespace UIOperateInterleaverFinalTest
         /// </summary>
         private Queue<string> batchSnQueue;
 
+        /// <summary>
+        /// 1×16 批次是否已因常温 MAXIL/MINIL 超限终止
+        /// </summary>
+        private bool batchTestAborted = false;
+
         public delegate void GetUDLMessageDelegate(ref string msg, ref bool isSuccess);
 
         /// <summary>
@@ -748,6 +753,10 @@ namespace UIOperateInterleaverFinalTest
 
         private void btnOpenTemplate_Click(object sender, RoutedEventArgs e)
         {
+            if (allProductControl.Count == 0)
+            {
+                batchTestAborted = false;
+            }
             string errMsg = "";
             string strGoldsampleSN = mainInfo.Goldsample;
             errMsg = string.Format("goldsampleSN:{0},userID:{1}", strGoldsampleSN, mainInfo.UserID);
@@ -851,6 +860,7 @@ namespace UIOperateInterleaverFinalTest
 
         private void ClearListData()
         {
+            batchTestAborted = false;
             testItemShow = new FusionControl();
             // 更新测试信息
             if (EventAggregator != null)
@@ -2604,6 +2614,95 @@ namespace UIOperateInterleaverFinalTest
             UpdateProductStatuses();
         }
 
+        private bool IsMultiSnSinglePortBatch()
+        {
+            return allProductControl.Count > 1 && portAndNameDic.Count == 1;
+        }
+
+        private static bool IsRoomTemperature(double tmpt)
+        {
+            return tmpt >= 20 && tmpt <= 30;
+        }
+
+        private static bool IsMaxMinIlParam(string exParamName)
+        {
+            if (string.IsNullOrEmpty(exParamName))
+                return false;
+            string key = exParamName.Split('@')[0].ToUpper();
+            return key == "MAXIL" || key == "MINIL";
+        }
+
+        private bool TryGetRoomTempMaxMinIlFailure(out string message)
+        {
+            message = "";
+            if (!IsRoomTemperature(curTestTmpt))
+                return false;
+
+            for (int p = 0; p < allProductControl.Count; p++)
+            {
+                List<MESTestInfo> infos = allProductControl[p].GetAllTestInfo();
+                string sn = allProductControl[p].ProductSN;
+                for (int i = 0; i < infos.Count; i++)
+                {
+                    MESTestInfo info = infos[i];
+                    if (Math.Abs(info.Temperature - curTestTmpt) > 0.001)
+                        continue;
+                    if (!info.Tested || info.Pass)
+                        continue;
+                    if (!IsMaxMinIlParam(info.ExParamName))
+                        continue;
+                    string[] splits = info.PortNameForUser.Split('_');
+                    if (splits.Length != 1)
+                        continue;
+                    if (info.PortNameForUser.Equals("Frequency Range", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    message = string.Format(
+                        "SN:{0}\r\n端口:{1}\r\n参数:{2}\r\n实测:{3:F3}\r\n限值:[{4}, {5}]",
+                        sn, info.PortNameForUser, info.ExParamName, info.CurValue, info.Criterion, info.Criterion1);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private void AbortBatchTest(string detailMessage)
+        {
+            batchTestAborted = true;
+            batchSnQueue = null;
+            string prompt = "产品批次有问题：常温测试 MAXIL/MINIL 超限，已终止整个测试。";
+            if (!string.IsNullOrEmpty(detailMessage))
+                prompt += "\r\n\r\n" + detailMessage;
+            CommonFunction.WriteLog(prompt);
+            RealtimeMsg(prompt, StatusType.Error);
+            ErrorBox(prompt);
+            UIControl.IsScanEnable = true;
+            UIControl.IsSaveEnable = true;
+            UpdateResIcon();
+            UpdateProductStatuses();
+        }
+
+        private bool TryAbortBatchForRoomTempIl()
+        {
+            if (!IsMultiSnSinglePortBatch() || batchTestAborted)
+                return false;
+            if (!IsRoomTemperature(curTestTmpt))
+                return false;
+            string msg;
+            if (!TryGetRoomTempMaxMinIlFailure(out msg))
+                return false;
+            AbortBatchTest(msg);
+            return true;
+        }
+
+        private bool IsBatchTestAbortedBlocked()
+        {
+            if (!batchTestAborted)
+                return false;
+            WarningBox("产品批次测试已终止（常温 MAXIL/MINIL 超限）。请清空列表或重新点击「一键测试」后再测。");
+            return true;
+        }
+
         /// <summary>
         /// 扫描结束后处理
         /// </summary>
@@ -2722,7 +2821,11 @@ namespace UIOperateInterleaverFinalTest
             if(scanInfo.ScanType==SCANTYPE.TestWithPDL)
             {
                 if (scanErrorMsg.Length == 0)
+                {
                     ParamItemUpdate(CurProductIndex);
+                    if (TryAbortBatchForRoomTempIl())
+                        return;
+                }
                 UIControl.IsScanEnable = true;
                 UIControl.IsSaveEnable = true;              
             }
@@ -2732,6 +2835,8 @@ namespace UIOperateInterleaverFinalTest
                 if (scanErrorMsg.Length == 0)
                 {
                     ParamItemUpdate(CurProductIndex);
+                    if (TryAbortBatchForRoomTempIl())
+                        return;
                     OnekeyScan();
                 }
                 else
@@ -2852,6 +2957,7 @@ namespace UIOperateInterleaverFinalTest
                 WarningBox("请检查模板是否出错!");
                 return;
             }
+            batchTestAborted = false;
             /*foreach(PortAssist assist in portAssistant)
             {                
                 assist.IsTested = false;
@@ -2863,6 +2969,12 @@ namespace UIOperateInterleaverFinalTest
         
         private void OnekeyScan()
         {
+            if (batchTestAborted)
+            {
+                UIControl.IsScanEnable = true;
+                UIControl.IsSaveEnable = true;
+                return;
+            }
             //获取未测试的端口
             scanDetailInfo.Ports.Clear();
             List<int> scanPorts = new List<int>();
@@ -3104,6 +3216,8 @@ namespace UIOperateInterleaverFinalTest
 
         private void btnSingleScan_Click(object sender, RoutedEventArgs e)
         {
+            if (IsBatchTestAbortedBlocked())
+                return;
             RealtimeMsg(string.Format("开始singleScan"));
             if (selectItem!=null&& selectItem.ParamIndex.Count>0)
             {
