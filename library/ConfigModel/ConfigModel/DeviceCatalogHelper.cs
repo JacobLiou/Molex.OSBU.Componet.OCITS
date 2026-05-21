@@ -81,7 +81,8 @@ namespace ConfigModel
             cfg.ControlName = Devices.MPLUSSwitch.GetAdditional();
             cfg.ControlKey[0] = "COM";
             cfg.ControlKey[1] = "波特率";
-            cfg.Control[1] = "9600";
+            cfg.Control[1] = "115200";
+            cfg.CheckCmd = "MSW 1,1,2;9,1,1;";
             return cfg;
         }
 
