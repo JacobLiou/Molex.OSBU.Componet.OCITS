@@ -7,7 +7,6 @@ using System.IO;
 using System.Runtime.Serialization.Formatters.Binary;
 using System.Xml;
 using System.Runtime.InteropServices;
-using System.Reflection;
 
 namespace MolexUtility
 {
@@ -277,6 +276,9 @@ namespace MolexUtility
             }
         }
 
+        // TMS/MES 能力均来自 USL.TAS.dll 的 USLTASLibraryInterface（非 MolexUtility 自实现）。
+        // 仓库根目录 ITasCommLib.cs 仅为平台接口说明，不必编入本工程；调用方式与 TriggerWorkStationVerify 相同。
+
         public static bool GoldsampleCheck(string goldSampleSN,string userID,string type, ref string errMsg)
         {
             USLTASLibraryInterface tas = new USLTASLibraryInterface();
@@ -321,17 +323,8 @@ namespace MolexUtility
         }
 
         /// <summary>
-        /// 归零完成后上传校准时间到 TMS（C++ UploadTestSystemCailbrationTime）。
-        /// 当前 ITasCommLib 截图无此方法：优先走 Hook；其次反射 DLL；均未实现时由 <see cref="AllowSkipUploadRefCalibrationTimeWhenNotImplemented"/> 决定是否放行。
-        /// 预期签名：bool UploadTestSystemCalibrationTime(string userId, ref string errMsg)
+        /// 归零完成后上传校准时间到 TMS（USL.TAS.dll → USLTASLibraryInterface.UploadTestSystemCailbrationTime）。
         /// </summary>
-        public static Func<string, string, bool> UploadRefCalibrationTimeHook { get; set; }
-
-        /// <summary>
-        /// true：DLL/Hook 未对接时仅写日志并视为成功（联调用）；false：未对接则返回失败。
-        /// </summary>
-        public static bool AllowSkipUploadRefCalibrationTimeWhenNotImplemented { get; set; } = true;
-
         public static bool UploadRefCalibrationTime(string userID, ref string errMsg)
         {
             errMsg = "";
@@ -341,66 +334,16 @@ namespace MolexUtility
                 return false;
             }
 
-            if (UploadRefCalibrationTimeHook != null)
-                return UploadRefCalibrationTimeHook(userID, ref errMsg);
-
-            if (TryInvokeUploadRefCalibrationTimeViaTas(userID, ref errMsg))
-                return true;
-
-            string stubMsg = "ITasCommLib 未导出 UploadTestSystemCalibrationTime（或 UploadTestSystemCailbrationTime）。" +
-                "请在 FusionControl.UploadRefCalibrationTimeHook 中对接，或升级 USL.TAS.dll。";
-            CommonFunction.WriteLog("[TMS GDS] " + stubMsg);
-            if (AllowSkipUploadRefCalibrationTimeWhenNotImplemented)
-            {
-                errMsg = stubMsg + "（当前 AllowSkipUploadRefCalibrationTimeWhenNotImplemented=true，已跳过上传。）";
-                return true;
-            }
-            errMsg = stubMsg;
-            return false;
-        }
-
-        private static bool TryInvokeUploadRefCalibrationTimeViaTas(string userID, ref string errMsg)
-        {
-            errMsg = "";
             try
             {
                 USLTASLibraryInterface tas = new USLTASLibraryInterface();
-                Type tasType = tas.GetType();
-                MethodInfo method = tasType.GetMethod("UploadTestSystemCalibrationTime", BindingFlags.Instance | BindingFlags.Public)
-                    ?? tasType.GetMethod("UploadTestSystemCailbrationTime", BindingFlags.Instance | BindingFlags.Public);
-                if (method == null)
-                    return false;
-
-                ParameterInfo[] ps = method.GetParameters();
-                object[] args;
-                if (ps.Length == 1)
+                if (!tas.UploadTestSystemCailbrationTime(userID, ref errMsg))
                 {
-                    args = new object[] { userID };
-                }
-                else if (ps.Length == 2)
-                {
-                    args = new object[] { userID, "" };
-                }
-                else
-                {
-                    errMsg = "UploadTestSystemCalibrationTime 参数个数不支持：" + ps.Length;
+                    if (string.IsNullOrEmpty(errMsg))
+                        errMsg = "UploadTestSystemCailbrationTime 返回失败。";
                     return false;
                 }
-
-                object result = method.Invoke(tas, args);
-                if (ps.Length == 2 && args[1] is string outMsg)
-                    errMsg = outMsg ?? "";
-
-                if (result is bool b)
-                    return b;
-                if (result is int n)
-                    return n >= 0;
-                return false;
-            }
-            catch (TargetInvocationException tex)
-            {
-                errMsg = tex.InnerException != null ? tex.InnerException.Message : tex.Message;
-                return false;
+                return true;
             }
             catch (Exception ex)
             {

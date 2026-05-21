@@ -410,14 +410,6 @@ namespace UIOperateInterleaverFinalTest
             refTimeCheckBK.ProgressChanged += RefTimeCheck_Progress;
             refTimeCheckBK.WorkerSupportsCancellation = true;
             refTimeCheckBK.WorkerReportsProgress = true;
-
-            // TMS GDS：DLL 提供 UploadTestSystemCalibrationTime 后可去掉 Hook；产线正式跑建议 AllowSkip=false
-            // FusionControl.AllowSkipUploadRefCalibrationTimeWhenNotImplemented = false;
-            // FusionControl.UploadRefCalibrationTimeHook = (userId, ref err) =>
-            // {
-            //     var tas = new USLTASLibrary.USLTASLibraryInterface();
-            //     return tas.UploadTestSystemCalibrationTime(userId, ref err);
-            // };
         }
 
         public static bool GetMessage(ref string msg)
@@ -1465,10 +1457,7 @@ namespace UIOperateInterleaverFinalTest
                         UIControl.IsReferenceEnable = true;
                         break;
                     }
-                    if (!string.IsNullOrEmpty(uploadRefErr) && uploadRefErr.Contains("AllowSkipUploadRefCalibrationTimeWhenNotImplemented"))
-                        RealtimeMsg(uploadRefErr, StatusType.Error);
-                    else
-                        RealtimeMsg("归零时间已上传 TMS。");
+                    RealtimeMsg("归零时间已上传 TMS。");
                     break;
                 }
                 //只需要对一个温度进行归零即可
