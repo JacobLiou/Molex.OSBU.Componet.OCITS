@@ -86,6 +86,9 @@ namespace UIOperateInterleaverFinalTest
 
         private const int TCC_GUID = 1;
 
+        /// <summary>循环箱实测温度与模板要求温度的允许偏差（°C）</summary>
+        private const double TccTempToleranceCelsius = 2.0;
+
         /// <summary>
         /// 是否正在烤温
         /// </summary>
@@ -2026,6 +2029,18 @@ namespace UIOperateInterleaverFinalTest
         /// <param name="scanType">扫描类型</param>
         private void DoScanOnBK()
         {
+            if (curTestTmpt > -299)
+            {
+                string chamberMsg;
+                if (!TryValidateChamberTemperature(curTestTmpt, out chamberMsg))
+                {
+                    RealtimeMsg(chamberMsg, StatusType.Error);
+                    ErrorBox(chamberMsg);
+                    UIControl.IsScanEnable = true;
+                    UIControl.IsSaveEnable = true;
+                    return;
+                }
+            }
             if (GetIsScanFinished())
             {
                 SetIsScanFinished(false);
@@ -2722,6 +2737,72 @@ namespace UIOperateInterleaverFinalTest
             return true;
         }
 
+        private static int TryReadChamberTemperature(IUDLTCC tcc, out double actual, ref string errMsg)
+        {
+            actual = 0;
+            if (tcc == null)
+            {
+                errMsg = "循环箱未配置或未连接。";
+                return 1;
+            }
+            int res = tcc.GetCurrentTemp(out actual, ref errMsg);
+            if (res != 0)
+            {
+                Thread.Sleep(100);
+                res = tcc.GetCurrentTemp(out actual, ref errMsg);
+            }
+            return res;
+        }
+
+        private bool TryValidateChamberTemperature(double requiredTmpt, out string message)
+        {
+            message = "";
+            string errMsg = "";
+            IUDLTCC tccCtrl = null;
+            DeviceControl.GetUDLTCCByGUID(TCC_GUID, ref tccCtrl, ref errMsg);
+            if (tccCtrl == null)
+            {
+                message = string.IsNullOrEmpty(errMsg)
+                    ? "循环箱未配置或未连接，无法校验温度。"
+                    : "循环箱未配置或未连接：" + errMsg;
+                return false;
+            }
+            double actual;
+            if (TryReadChamberTemperature(tccCtrl, out actual, ref errMsg) != 0)
+            {
+                message = string.Format("读取循环箱温度失败:{0}", errMsg);
+                return false;
+            }
+            if (Math.Abs(actual - requiredTmpt) > TccTempToleranceCelsius)
+            {
+                message = string.Format(
+                    "循环箱温度不符合模板要求，不能测试。\r\n模板要求:{0:F1}°C\r\n当前实测:{1:F1}°C\r\n允许偏差:±{2:F1}°C",
+                    requiredTmpt, actual, TccTempToleranceCelsius);
+                return false;
+            }
+            return true;
+        }
+
+        private bool EnsureChamberReadyForTest(double requiredTmpt, bool restoreOnekeyUiOnFail = false)
+        {
+            string message;
+            if (TryValidateChamberTemperature(requiredTmpt, out message))
+            {
+                RealtimeMsg(string.Format("循环箱温度校验通过，模板要求 {0:F1}°C", requiredTmpt));
+                return true;
+            }
+            RealtimeMsg(message, StatusType.Error);
+            ErrorBox(message);
+            if (restoreOnekeyUiOnFail)
+            {
+                RealtimeMsg("一键测试结束");
+                UIControl.IsReferenceEnable = true;
+                UIControl.IsScanEnable = true;
+                UIControl.IsSaveEnable = true;
+            }
+            return false;
+        }
+
         /// <summary>
         /// 扫描结束后处理
         /// </summary>
@@ -3071,55 +3152,7 @@ namespace UIOperateInterleaverFinalTest
             }
             //切换开关
             SetSwitch(productID,testPortName);
-            //CurProductIndex = productID;
 
-            //判断是否需要烤温
-            bool isNeedHeat = false;
-        
-            IUDLTCC tccCtrl = null;
-            DeviceControl.GetUDLTCCByGUID(TCC_GUID, ref tccCtrl, ref errMsg);
-            
-            if (tccCtrl == null)
-            {
-                if (curTestTmpt.CompareTo(-300) == 0)
-                {
-                    if (scanTmpt > 20 && curTestTmpt < 30)
-                    {
-                        isNeedHeat = false;
-                    }
-                    else
-                        isNeedHeat = true;
-                }
-                else if (curTestTmpt.CompareTo(scanTmpt) != 0)
-                {
-                    isNeedHeat = true;
-                }
-            }
-            else
-            {
-                double dTccTemp;
-                int nTccRes=tccCtrl.GetCurrentTemp(out dTccTemp,ref errMsg);
-                if (nTccRes!=0)
-                {
-                    Thread.Sleep(100);
-                    nTccRes = tccCtrl.GetCurrentTemp(out dTccTemp, ref errMsg);
-                    if (nTccRes != 0)
-                    {
-                        string prompt = "";
-                        prompt = string.Format("读取循环箱温度失败:{0}", errMsg);
-                        RealtimeMsg(prompt);
-                        RealtimeMsg("一键测试结束");
-                        UIControl.IsReferenceEnable = true;
-                        UIControl.IsScanEnable = true;
-                        UIControl.IsSaveEnable = true;
-                        return;
-                    }
-                }
-                if (Math.Abs(dTccTemp - scanTmpt) > 5)
-                {
-                    isNeedHeat = true;
-                }
-            }
             scanDetailInfo.ScanType = SCANTYPE.TestWithPDLOnekey;
             UIControl.IsScanEnable = false;
 
@@ -3138,60 +3171,11 @@ namespace UIOperateInterleaverFinalTest
             }
             UpdateItem(testShowControl[productID-1].GetAllTestInfo()[0], productID-1, 0, nextSeleted);
 
-            if (isNeedHeat)
-            {
-                //烤温是否需要增加提示
-                string prompt = "";
-               // string prompt = string.Format("是否进行{0}度烤温", portAssistant[i].TestTmpt);
-                //if (IsAllPass()==true||MessageBox.Show(prompt, "温馨提示", MessageBoxButton.OKCancel) == MessageBoxResult.OK)
-                {
-                   
-                    prompt= string.Format("开始进行{0}度烤温", portAssistant[i].TestTmpt);
-                    RealtimeMsg(prompt);
-                   if (tccCtrl == null)
-                    {
-                        prompt = string.Format("循环箱未连接，请先连接循环箱！");
-                        RealtimeMsg(prompt);
-                        RealtimeMsg("一键测试结束");
-                        UIControl.IsReferenceEnable = true;
-                        UIControl.IsScanEnable = true;
-                        UIControl.IsSaveEnable = true;
-                        return;
-                    }
+            if (!EnsureChamberReadyForTest(scanTmpt, restoreOnekeyUiOnFail: true))
+                return;
 
-                    int nTccRes=tccCtrl.SetTempSetpoint(portAssistant[i].TestTmpt,ref errMsg);
-                    if (nTccRes!=0)
-                    {
-                        nTccRes = tccCtrl.SetTempSetpoint(portAssistant[i].TestTmpt, ref errMsg);
-                        if (nTccRes != 0)
-                        {
-                            prompt = string.Format("循环箱设置温度失败:{0},{1}",portAssistant[i].TestTmpt, errMsg);
-                            RealtimeMsg(prompt);
-                            RealtimeMsg("一键测试结束");
-                            UIControl.IsReferenceEnable = true;
-                            UIControl.IsScanEnable = true;
-                            UIControl.IsSaveEnable = true;
-                            return;
-                        }
-                    }
-                    double tmptChangeTimes = portAssistant[i].TmptChangeTimes;
-                    bakeTimeCheckBK.RunWorkerAsync(tmptChangeTimes * 60);
-                    curTestTmpt = scanTmpt;
-                }
-                /*else
-                {
-                    RealtimeMsg("一键测试结束");
-                    UIControl.IsReferenceEnable = true;
-                    UIControl.IsScanEnable = true;
-                    UIControl.IsSaveEnable = true;
-                    return;
-                }*/
-            }
-            else
-            {
-                curTestTmpt = scanTmpt;
-                DoScanOnBK();
-            }
+            curTestTmpt = scanTmpt;
+            DoScanOnBK();
         }
 
         public void GetUDLMessage(ref string msg, ref bool isSuccess)
@@ -3253,7 +3237,6 @@ namespace UIOperateInterleaverFinalTest
                 //进光端一样，则可以一起扫描，比如in-to,in-te,in-moni同时扫描
                 string testPortName = "";
                 int scanIndex = -1;
-                double tmptChangeTimes = 0;
                
                 foreach (PortAssist assist in portAssistant)
                 {
@@ -3268,7 +3251,6 @@ namespace UIOperateInterleaverFinalTest
                     if ((selectItem.ProductIndex+1) == assist.ProductIndex && scanIndex == assist.ScanIndex
                         && selectTestItem.Temperature == assist.TestTmpt)
                     {
-                        tmptChangeTimes = assist.TmptChangeTimes;
                         testPortName = assist.Port;
                         scanDetailInfo.Ports.Add(assist.PortIndex);
                     }
@@ -3285,87 +3267,16 @@ namespace UIOperateInterleaverFinalTest
                 //切换开关
                 //SetSwitch(true);
                 double testTmpt = selectTestItem.Temperature;
-                RealtimeMsg(string.Format("当前测试温度:{0}",testTmpt));
-                //判断是否需要烤温
-                bool isNeedHeat = false;
-             
-                IUDLTCC tccCtrl = null;
-                DeviceControl.GetUDLTCCByGUID(TCC_GUID, ref tccCtrl, ref errMsg);
-                if (tccCtrl == null)
-                {
-                    RealtimeMsg(string.Format("循环箱未连接"));
-                    if (curTestTmpt.CompareTo(-300) == 0)
-                    {
-                        if (testTmpt > 20 && curTestTmpt < 30)
-                        {
-                            isNeedHeat = false;
-                        }
-                        else
-                            isNeedHeat = true;
-                    }
-                    else if (curTestTmpt.CompareTo(testTmpt) != 0)
-                    {
-                        isNeedHeat = true;
-                    }
-                }
-                else
-                {
-                    double dTccTemp;
-                    int nTccRess=tccCtrl.GetCurrentTemp( out dTccTemp,ref errMsg);
-                    RealtimeMsg(string.Format("读取循环箱温度:{0}", dTccTemp));
-                    if (nTccRess!=0)
-                    {
-                        Thread.Sleep(100);
-                        nTccRess = tccCtrl.GetCurrentTemp(out dTccTemp, ref errMsg);
-                        if (nTccRess != 0)
-                        {
-                            string prompt = "";
-                            prompt = string.Format("读取循环箱温度失败:{0}", errMsg);
-                            RealtimeMsg(prompt);
-                            return;
-                        }
-                    }
-                    if(Math.Abs(dTccTemp- testTmpt)>5)
-                    {
-                        isNeedHeat = true;
-                    }
-                }
-                RealtimeMsg(string.Format("是否需要烤温:{0}", isNeedHeat));
+                RealtimeMsg(string.Format("当前测试温度:{0}", testTmpt));
+                if (!EnsureChamberReadyForTest(testTmpt))
+                    return;
+
                 scanDetailInfo.ScanType = SCANTYPE.TestWithPDL;
                 scanDetailInfo.ProductIndex = selectItem.ProductIndex + 1;
                 UIControl.IsScanEnable = false;
-                //需要知道选择的是产品几
                 SetSwitch(scanDetailInfo.ProductIndex, testPortName);
                 curTestTmpt = testTmpt;
-                if (isNeedHeat)
-                {
-                    string prompt = "";
-                   
-                    if (tccCtrl==null)
-                    {                       
-                        prompt = string.Format("循环箱未连接，请先连接循环箱！");
-                        RealtimeMsg(prompt);
-                        return;
-                    }
-                    //烤温是否需要增加提示
-                    prompt = string.Format("开始进行{0}度烤温", testTmpt);
-                    RealtimeMsg(prompt);
-                    int nTccRess = tccCtrl.SetTempSetpoint(testTmpt,ref errMsg);
-                    if (nTccRess!=0)
-                    {
-                        nTccRess = tccCtrl.SetTempSetpoint(testTmpt, ref errMsg);
-                        if (nTccRess != 0)
-                        {
-                            prompt = string.Format("循环箱设置温度失败:{0},{1}", testTmpt, errMsg);
-                            RealtimeMsg(prompt);
-                            return;
-                        }
-                    }
-                    bakeTimeCheckBK.RunWorkerAsync(tmptChangeTimes * 60);
-                    //curTestTmpt = testTmpt;
-                }
-                else
-                    DoScanOnBK();
+                DoScanOnBK();
             }
             //ReleaseCom(deviceEngine);
             //ReleaseCom(tccCtrl);
