@@ -158,6 +158,10 @@
       <Link>switch\interleaverSwitch-MPLUS</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <Content Include="..\..\..\bin\common\CRC32Lib.dll">
+      <Link>CRC32Lib.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\..\library\MolexUtility\MolexUtility.csproj">

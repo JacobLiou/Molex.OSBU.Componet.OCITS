@@ -643,7 +643,14 @@ namespace DeviceControl
                 }
                 else
                 {
-                    desSwitch = opticalSwitchs[0];
+                    int index = idx - 1;
+                    if (index < 0 || index >= opticalSwitchs.Count)
+                    {
+                        desSwitch = null;
+                        errMsg += "光源盒 " + idx + ": 该光源盒不存在";
+                        return 1;
+                    }
+                    desSwitch = opticalSwitchs[index];
                     return 0;
                 }
             }

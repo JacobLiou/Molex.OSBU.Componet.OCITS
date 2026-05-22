@@ -110,17 +110,18 @@
 | SwitchMini1X8 | Min1X8Switch | 十六进制帧 `*...\r` + 校验和 |
 | SwitchPbox | PboxSwitch | 同上 |
 | SwitchOMS | OMSSwitch | ASCII + CRLF，`OK` 应答 |
-| **SwitchMPLUS** | **MPLUSSwitch** | **1×16 RS232 MSW 协议**，ASCII + CRLF，读到 `>`/`OK` |
+| **SwitchMPLUS** | **MPLUSSwitch** | **RS232 MSW 协议**，ASCII + CRLF；ITL FTS **双设备**（入 16 / 出 32） |
 | Switch3STD | （需配置） | 十六进制（工程内有，按工位选用） |
 | UDLSwitch | UDLSwitch | 走 UDL 引擎 |
 
-**MPLUS 1×16（本工位新方案）要点：**
+**MPLUS 双光开关（本工位，1×16 入 + 1×32 出）要点：**
 
 - 驱动：`library/DeviceControl/DeviceControl/Switch/SwitchMPLUS.cs`
-- 配置示例：`doc/switch/ITL_MPLUS_SW.example` → 部署为 `{运行目录}\switch\{ShowName}`
-- Flag 格式：`产品序号::通道号:最大通道数`（如 `1::5:16`）
-- MSW 命令示例：`MSW 1,1,2;9,1,5;`（拓扑见 `doc/OpticalSwitchController.cs`、`doc/物理拓扑图.png`）
-- UI 端口名映射：`OperateInteleaverFinalTest` 中 `L3-4`…`L2-1` → 通道 1–8
+- 设备配置：光源盒 **两条** MPLUS — `interleaverSwitch-MPLUS-IN`（COM1）、`interleaverSwitch-MPLUS-OUT`（COM2）
+- 指令表示例：`doc/switch/ITL_MPLUS_SW_IN.example`、`doc/switch/ITL_MPLUS_SW_OUT.example` → `{运行目录}\switch\{ShowName}`
+- 入光 Flag：`产品序号::入通道:16`（如 `3::3:16`）；出光 Flag：`PM序号::出通道:32`（如 `1::5:32`）
+- MSW 需与现场拓扑一致（见 `doc/OpticalSwitchController.cs`、`doc/物理拓扑图.png`）；切换时先入后出
+- UI 端口名映射：`OperateInteleaverFinalTest` 中 `L3-4`…`L4-1` → 出通道 1–16
 
 ### 3.5 一次会话的主流程（终测）
 
@@ -240,7 +241,9 @@ SW2219_ITL_FTS/
 | [UIOperateInterleaverFinalTest_方法索引.md](doc/UIOperateInterleaverFinalTest_方法索引.md) | 方法级索引 |
 | [vs code UIOperateInterleaverFinalTest_代码逻辑全解.md](doc/vs%20code%20UIOperateInterleaverFinalTest_代码逻辑全解.md) | 更细的代码走读 |
 | [OpticalSwitchController.cs](doc/OpticalSwitchController.cs) | MPLUS/MSW 协议参考实现（独立服务用） |
-| [switch/ITL_MPLUS_SW.example](doc/switch/ITL_MPLUS_SW.example) | 16 路光开关配置示例 |
+| [switch/ITL_MPLUS_SW_IN.example](doc/switch/ITL_MPLUS_SW_IN.example) | 入光 16 路指令表示例 |
+| [switch/ITL_MPLUS_SW_OUT.example](doc/switch/ITL_MPLUS_SW_OUT.example) | 出光 32 路×PM 指令表示例 |
+| [set/Deviceconfig_ITL_FTS.example.xml](doc/set/Deviceconfig_ITL_FTS.example.xml) | 双 MPLUS 设备配置示例 |
 | [物理拓扑图.png](doc/物理拓扑图.png)、[1X16.png](doc/1X16.png) | 光路示意 |
 | [releaseDesc.md](doc/releaseDesc.md) | 产线 Release 目录说明 |
 

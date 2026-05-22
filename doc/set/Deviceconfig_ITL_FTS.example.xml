@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="gb2312"?>
+<!-- ITL FTS 终测：双 MPLUS 光开关示例。部署到 set\Deviceconfig.xml 时请用 GB2312 保存。 -->
+<Root>
+  <DeviceConfig name="光源盒">
+    <Device name="interleaverSwitch-MPLUS-IN">
+      <Type>MPLUSSwitch</Type>
+      <check>MSW 1,1,2;2,1,1;</check>
+      <control0 name="COM">COM1</control0>
+      <control1 name="波特率">115200</control1>
+    </Device>
+    <Device name="interleaverSwitch-MPLUS-OUT">
+      <Type>MPLUSSwitch</Type>
+      <check>MSW 9,1,1;</check>
+      <control0 name="COM">COM2</control0>
+      <control1 name="波特率">115200</control1>
+    </Device>
+  </DeviceConfig>
+</Root>

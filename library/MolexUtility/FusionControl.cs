@@ -13,8 +13,57 @@ namespace MolexUtility
     [Serializable]
     public class FusionControl
     {
+        private static readonly object Crc32LoadLock = new object();
+        private static bool crc32LibLoaded;
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr LoadLibrary(string lpFileName);
+
         [DllImport("CRC32Lib.dll", EntryPoint = "GetCRC32", CallingConvention = CallingConvention.Cdecl)]
         public static extern UInt32 GetCRC32(byte[] content, long len);
+
+        static FusionControl()
+        {
+            EnsureCrc32LibLoaded();
+        }
+
+        /// <summary>
+        /// 原生 CRC32Lib.dll 默认只从 exe 目录加载；产线常放在 module\ 或 common\，需显式 LoadLibrary。
+        /// </summary>
+        private static void EnsureCrc32LibLoaded()
+        {
+            if (crc32LibLoaded)
+                return;
+
+            lock (Crc32LoadLock)
+            {
+                if (crc32LibLoaded)
+                    return;
+
+                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                string[] candidates = new[]
+                {
+                    Path.Combine(baseDir, "CRC32Lib.dll"),
+                    Path.Combine(baseDir, "module", "CRC32Lib.dll"),
+                    Path.Combine(baseDir, "common", "CRC32Lib.dll"),
+                };
+
+                foreach (string path in candidates)
+                {
+                    if (!File.Exists(path))
+                        continue;
+                    if (LoadLibrary(path) != IntPtr.Zero)
+                    {
+                        crc32LibLoaded = true;
+                        return;
+                    }
+                }
+
+                throw new DllNotFoundException(
+                    "无法加载 CRC32Lib.dll。请将 CRC32Lib.dll 放在程序目录、" +
+                    "module\\ 或 common\\ 下（当前基目录: " + baseDir + "）。");
+            }
+        }
 
         public string ProductSN="";
         /// <summary>
@@ -97,12 +146,29 @@ namespace MolexUtility
             //return ".//data";
         }
 
+        private static void LogOpenTemplateStep(string step, string sn)
+        {
+            try
+            {
+                string logDir = Path.Combine(Environment.CurrentDirectory, "data");
+                if (!Directory.Exists(logDir))
+                    Directory.CreateDirectory(logDir);
+                string line = string.Format("{0:yyyy-MM-dd HH:mm:ss.fff} SN={1} {2}\r\n",
+                    DateTime.Now, sn ?? "", step ?? "");
+                File.AppendAllText(Path.Combine(logDir, "open_template.log"), line, Encoding.UTF8);
+            }
+            catch
+            {
+            }
+        }
+
         public string OpenTemplate(string SN, string MESProcess, string User, string Freecheck, bool bShowData, string computer,List<string> sptProcess, out string strTemplateName,out string errMsg)
         {
             errMsg = "";
             strTemplateName = "";
             try
             {
+                LogOpenTemplateStep("OpenTemplate begin", SN);
                 ProductSN = SN;
                 if (SN == "")
                 {
@@ -112,6 +178,7 @@ namespace MolexUtility
                 userRec = User;
                 //rjf test
                 USLTASLibraryInterface tas = new USLTASLibraryInterface();
+                LogOpenTemplateStep("SetEmployeeAccount", SN);
                 if(!tas.SetEmployeeAccount(User,ref errMsg))
                 {
                     errMsg = string.Format("TAS库设置员工账号出错：{0}", errMsg);
@@ -123,6 +190,7 @@ namespace MolexUtility
                 {
                     //rjf test
                     //computer = "ITPC180117";
+                    LogOpenTemplateStep("GetStationName " + computer, SN);
                     if (!tas.GetStationName(computer, ref stationRec, ref stationName, ref errMsg))
                     {
                         errMsg = "TAS获取工位信息出错";
@@ -135,6 +203,7 @@ namespace MolexUtility
                 string proWO = "";
                 string proCurProcess = "";
                 string proCurStatus = "";
+                LogOpenTemplateStep("GetProductKeyInfo", SN);
                 if(!tas.GetProductKeyInfo(SN,ref proPN,ref proSpec,ref proWO,ref proCurProcess,ref proCurStatus,ref errMsg))
                 {
                     errMsg = "获取产品关键信息出错"+ errMsg;
@@ -154,6 +223,7 @@ namespace MolexUtility
                 }
 
                 //如果有传入内部工序，则用内部工序判断，否则用OPC工序
+                LogOpenTemplateStep("GetTestProcessCode", SN);
                 string omsProcess = tas.GetTestProcessCode(proPN, proCurProcess, ref errMsg);
                 bool isSuport = false;
                 if(sptProcess.Count>0)
@@ -177,13 +247,24 @@ namespace MolexUtility
                 if(isSuport==false)
                 {
                     errMsg = string.Format("不支持该工序测试：{0}/{1}", proCurProcess, omsProcess);
-                }              
-
-                if (!tas.TriggerProcessMoveIn(SN, MESProcess, stationRec, ref errMsg))
-                {
-                    errMsg = "TAS Move In出错:"+ errMsg;
                     return "";
                 }
+
+                string skipMoveInPath = Path.Combine(Environment.CurrentDirectory, "set", "OpenTemplateSkipMoveIn.txt");
+                if (!File.Exists(skipMoveInPath))
+                {
+                    LogOpenTemplateStep("TriggerProcessMoveIn", SN);
+                    if (!tas.TriggerProcessMoveIn(SN, MESProcess, stationRec, ref errMsg))
+                    {
+                        errMsg = "TAS Move In出错:"+ errMsg;
+                        return "";
+                    }
+                }
+                else
+                {
+                    LogOpenTemplateStep("Skip MoveIn (set\\OpenTemplateSkipMoveIn.txt)", SN);
+                }
+                LogOpenTemplateStep("GetProdTestTemplate", SN);
                 templateConten = tas.GetProdTestTemplate(SN, MESProcess, User, Freecheck, bShowData, ref strTemplateName, ref errMsg);
                 
                 
@@ -210,15 +291,18 @@ namespace MolexUtility
                 MISCInfo.Clear();
                 productInfo = new MESProductInfo();
 
+                LogOpenTemplateStep("ParserTemplate", SN);
                 if (!ParserTemplate(templateConten, out errMsg))
                 {
                     return "";
                 }
+                LogOpenTemplateStep("OpenTemplate success", SN);
                 return templateConten;
             }
             catch (Exception ex)
             {
                 errMsg = "打开模板 出错(Exception)：" + ex.Message;
+                LogOpenTemplateStep("OpenTemplate exception: " + ex.Message, SN);
                 return "";
             }
         }
@@ -278,6 +362,9 @@ namespace MolexUtility
 
         // TMS/MES 能力均来自 USL.TAS.dll 的 USLTASLibraryInterface（非 MolexUtility 自实现）。
         // 仓库根目录 ITasCommLib.cs 仅为平台接口说明，不必编入本工程；调用方式与 TriggerWorkStationVerify 相同。
+        //
+        // 打开模板前工位 Golden Sample 校验（TriggerWorkStationVerify）暂不启用，避免 UI 线程同步等 TAS 导致卡死。
+        // 后续接入时请使用后台线程，并明确 mainInfo.Goldsample（工位/金样配置）与产品 SN 的判定规则。
 
         public static bool GoldsampleCheck(string goldSampleSN,string userID,string type, ref string errMsg)
         {
@@ -309,7 +396,21 @@ namespace MolexUtility
         }
 
         /// <summary>
+        /// 输入 SN 是否为配置的金样产品 SN（与 stations/MIMS 中 Goldsample 一致，或含 GDSM 标记）。
+        /// 供后续在打开模板前/后做工位校验时使用；当前打开模板流程不调用。
+        /// </summary>
+        public static bool IsGoldSampleProductSn(string productSn, string configuredGoldSample)
+        {
+            if (IsGdsGoldenSampleProduct(productSn))
+                return true;
+            if (string.IsNullOrWhiteSpace(productSn) || string.IsNullOrWhiteSpace(configuredGoldSample))
+                return false;
+            return productSn.Trim().Equals(configuredGoldSample.Trim(), StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
         /// 工位校验：非 GDSM 走 ITasCommLib.TriggerWorkStationVerify；GDSM 直接通过。
+        /// 当前终测打开模板不调用；保留供后续金样/工位技能校验接入。
         /// </summary>
         public static bool TryVerifyWorkStationForOpenTemplate(string goldSampleWorkStationId, string productSn, string userID, string verifyType, ref string errMsg)
         {

@@ -12,11 +12,10 @@
         <GroupBox Grid.Column="0" Background="AliceBlue" BorderThickness="2">
             <Grid >
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="6*"/>
-                    <ColumnDefinition Width="6*"/>
-                    <ColumnDefinition Width="6*"/>
-                    <ColumnDefinition Width="6*"/>
-                    <!--ColumnDefinition Width="100"/-->
+                    <ColumnDefinition Width="5*"/>
+                    <ColumnDefinition Width="5*"/>
+                    <ColumnDefinition Width="5*"/>
+                    <ColumnDefinition Width="11*" MinWidth="200"/>
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="1*"/>
@@ -56,19 +55,19 @@
                     <TextBlock Text="烤温倒计时:"  FontSize="14" VerticalAlignment="Bottom" HorizontalAlignment="Right"/>
                     <TextBlock Name="TemptRemainTime" Text="00:00:00"  FontWeight="Black" FontSize="14" VerticalAlignment="Center" HorizontalAlignment="Right"/>
                 </StackPanel>
-                <ScrollViewer Grid.Row="1" Grid.RowSpan="6" Grid.Column="3" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <ListView Name="listSNs" ItemsSource="{Binding}" FontSize="13" Margin="2" MinHeight="120" MaxHeight="420">
+                <ScrollViewer Grid.Row="1" Grid.RowSpan="6" Grid.Column="3" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                    <ListView Name="listSNs" ItemsSource="{Binding}" FontSize="13" Margin="2" MinHeight="120" MaxHeight="420" HorizontalContentAlignment="Stretch">
                         <ListView.View>
                             <GridView>
-                                <GridViewColumn Header="#" Width="24" DisplayMemberBinding="{Binding Index}"/>
-                                <GridViewColumn Header="状态" Width="32">
+                                <GridViewColumn Header="#" Width="28" DisplayMemberBinding="{Binding Index}"/>
+                                <GridViewColumn Header="状态" Width="40">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <Ellipse Width="12" Height="12" Fill="{Binding StatusBrush}" Margin="4,0"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
-                                <GridViewColumn Header="SN (最多16)" Width="110" DisplayMemberBinding="{Binding SN}"/>
+                                <GridViewColumn Header="SN (最多16)" Width="200" DisplayMemberBinding="{Binding SN}"/>
                             </GridView>
                         </ListView.View>
                     </ListView>

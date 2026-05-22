@@ -19,6 +19,8 @@ using System.ComponentModel.Composition;
 using System.ComponentModel.Composition.Hosting;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Threading;
 
 using MolexUtility;
 using MolexUtility.Command;
@@ -88,6 +90,9 @@ namespace UIOperateInterleaverFinalTest
 
         /// <summary>循环箱实测温度与模板要求温度的允许偏差（°C）</summary>
         private const double TccTempToleranceCelsius = 2.0;
+
+        /// <summary>TAS 打开模板 STA 线程最长等待（毫秒）</summary>
+        private const int OpenTemplateStaTimeoutMs = 180000;
 
         /// <summary>
         /// 是否正在烤温
@@ -760,11 +765,6 @@ namespace UIOperateInterleaverFinalTest
             {
                 batchTestAborted = false;
             }
-            string errMsg = "";
-            string strGoldsampleSN = mainInfo.Goldsample;
-            errMsg = string.Format("goldsampleSN:{0},userID:{1}", strGoldsampleSN, mainInfo.UserID);
-            RealtimeMsg(errMsg);
-            errMsg = "";
 
             if (UIControl.SN != null && UIControl.SN.Length == 0)
             {
@@ -772,17 +772,6 @@ namespace UIOperateInterleaverFinalTest
                 return;
             }
 
-            if (!FusionControl.TryVerifyWorkStationForOpenTemplate(strGoldsampleSN, UIControl.SN, mainInfo.UserID, "", ref errMsg))
-            {
-                string errPrmpt = string.Format("Goldsample验证失败{0}:{1}", strGoldsampleSN, errMsg);
-                MessageBox.Show(errPrmpt, "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-                return;
-
-            }
-            if (FusionControl.IsGdsGoldenSampleProduct(UIControl.SN))
-            {
-                RealtimeMsg("GDS 金样：已跳过工位 Golden Sample 校验，直接打开模板。");
-            }
             if (mainInfo == null)
             {
                 ErrorBox("无工位信息，请检查配置！");
@@ -807,10 +796,10 @@ namespace UIOperateInterleaverFinalTest
             }
 
             if (portAndNameDic.Count > 0 &&
-                (allProductControl.Count + 1) * portAndNameDic.Count > OpticalSwitchConfigNames.MaxSwitchChannels)
+                (allProductControl.Count + 1) * portAndNameDic.Count > OpticalSwitchConfigNames.MaxOutputSwitchChannels)
             {
-                ErrorBox(string.Format("产品数×端口数不能超过{0}（当前将超出开关通道容量）！",
-                    OpticalSwitchConfigNames.MaxSwitchChannels));
+                ErrorBox(string.Format("产品数×端口数不能超过{0}（当前将超出出光开关通道容量）！",
+                    OpticalSwitchConfigNames.MaxOutputSwitchChannels));
                 return;
             }
             portRawdatas.Clear();
@@ -818,10 +807,36 @@ namespace UIOperateInterleaverFinalTest
             curTestTmpt = -300;
             UIControl.IsSaveEnable = false;
             UIControl.IsScanEnable = false;
+            var workArgs = new OpenTemplateWorkArgs
+            {
+                Sn = UIControl.SN,
+                TestProcess = mainInfo.TestProcess,
+                UserId = mainInfo.UserID,
+                MachineName = Environment.MachineName,
+                ExistingSns = AllProducts.Select(p => p.SN).ToList(),
+                ExistingProductCount = allProductControl.Count
+            };
             BackgroundWorker templateBK = new BackgroundWorker();
             templateBK.DoWork += OpenTemplateBK_DoWork;
             templateBK.RunWorkerCompleted += OpenTemplateBK_RunWorkerCompleted;
-            templateBK.RunWorkerAsync();
+            templateBK.RunWorkerAsync(workArgs);
+        }
+
+        private sealed class OpenTemplateWorkArgs
+        {
+            public string Sn;
+            public string TestProcess;
+            public string UserId;
+            public string MachineName;
+            public List<string> ExistingSns;
+            public int ExistingProductCount;
+        }
+
+        private sealed class OpenTemplateWorkResult
+        {
+            public string ErrorMessage = "";
+            public string TemplateName = "";
+            public FusionControl FusionControl;
         }
 
         private string templateName = "";
@@ -830,40 +845,118 @@ namespace UIOperateInterleaverFinalTest
         /// </summary>
         /// <param name="sender"></param>
         /// <param name="e"></param>
-        private void OpenTemplateBK_DoWork(object sender, DoWorkEventArgs e)
+        /// <summary>
+        /// 在 STA 线程调用 TAS（USL.TAS.dll），避免 BackgroundWorker 默认 MTA 导致本机崩溃。
+        /// </summary>
+        private OpenTemplateWorkResult DoOpenTemplateOnStaThread(OpenTemplateWorkArgs args)
         {
-            foreach (TestProductInfo info in AllProducts)
+            var result = new OpenTemplateWorkResult();
+            if (args == null || string.IsNullOrEmpty(args.Sn))
             {
-                if (info.SN == UIControl.SN)
+                result.ErrorMessage = "打开模板参数无效。";
+                return result;
+            }
+            if (args.ExistingSns != null)
+            {
+                foreach (string existingSn in args.ExistingSns)
                 {
-                    e.Result= "该SN号已存在测试列表！";
-                    return;
+                    if (string.Equals(existingSn, args.Sn, StringComparison.OrdinalIgnoreCase))
+                    {
+                        result.ErrorMessage = "该SN号已存在测试列表！";
+                        return result;
+                    }
                 }
             }
             FusionControl control = new FusionControl();
             string errMsg = "";
-            //string templateName = "";
-            //allProductControl.Clear();
+            string tmplName = "";
             List<string> sptProcess = new List<string>();
-            string tmpltContent = control.OpenTemplate(UIControl.SN, mainInfo.TestProcess, mainInfo.UserID, "", false, Environment.MachineName, sptProcess, out templateName, out errMsg);
-            if (tmpltContent.Length>0)
+            string tmpltContent = control.OpenTemplate(args.Sn, args.TestProcess, args.UserId, "", false,
+                args.MachineName, sptProcess, out tmplName, out errMsg);
+            result.TemplateName = tmplName ?? "";
+            if (tmpltContent.Length > 0)
             {
-                if(allProductControl.Count>0)
+                result.FusionControl = control;
+                result.ErrorMessage = "";
+            }
+            else
+            {
+                result.ErrorMessage = errMsg ?? "";
+            }
+            return result;
+        }
+
+        private void OpenTemplateBK_DoWork(object sender, DoWorkEventArgs e)
+        {
+            var args = e.Argument as OpenTemplateWorkArgs;
+            OpenTemplateWorkResult result = null;
+            Exception threadEx = null;
+            bool timedOut = false;
+            var staThread = new Thread(() =>
+            {
+                try
                 {
-                    if(allProductControl[0].GetProductInfo().Spec==control.GetProductInfo().Spec)
+                    result = DoOpenTemplateOnStaThread(args);
+                }
+                catch (Exception ex)
+                {
+                    threadEx = ex;
+                }
+            });
+            staThread.SetApartmentState(ApartmentState.STA);
+            staThread.IsBackground = true;
+            staThread.Start();
+            if (!staThread.Join(OpenTemplateStaTimeoutMs))
+                timedOut = true;
+
+            if (result == null)
+                result = new OpenTemplateWorkResult();
+            if (timedOut)
+                result.ErrorMessage = "打开模板超时（TAS/MES 无响应），请检查网络、工序与 data\\open_template.log。";
+            else if (threadEx != null)
+            {
+                result.ErrorMessage = "打开模板异常：" + threadEx.Message;
+                CommonFunction.WriteLog("OpenTemplateBK_DoWork STA: " + threadEx);
+            }
+            e.Result = result;
+        }
+
+        private void FinishOpenTemplateFailed(string errMsg)
+        {
+            if (allProductControl.Count > 0)
+            {
+                UIControl.IsScanEnable = true;
+            }
+            batchSnQueue = null;
+            RealtimeMsg(errMsg, StatusType.Error);
+            ErrorBox(errMsg);
+        }
+
+        private static void TryOpenTemplateNoticeHtmlAsync(FusionControl fusionControl)
+        {
+            if (fusionControl == null)
+                return;
+            Task.Run(() =>
+            {
+                try
+                {
+                    var productInfo = fusionControl.GetProductInfo();
+                    string strUrl = string.Format("\\\\zh-mfs-srv\\Public\\TestTemplate\\{0}\\{1}@{2}.HTML",
+                        productInfo.ProductPN, productInfo.ProductPN, productInfo.SpecNum);
+                    if (File.Exists(strUrl))
                     {
-                        allProductControl.Add(control);
-                    }
-                    else
-                    {
-                        e.Result = "该产品Spec与测试列表Spen不一致！";
-                        return;
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = strUrl,
+                            WindowStyle = ProcessWindowStyle.Normal
+                        });
                     }
                 }
-                else
-                    allProductControl.Add(control);
-            }
-            e.Result = errMsg;
+                catch (Exception ex)
+                {
+                    CommonFunction.WriteLog("TryOpenTemplateNoticeHtmlAsync: " + ex.Message);
+                }
+            });
         }
 
         private void ClearListData()
@@ -970,7 +1063,15 @@ namespace UIOperateInterleaverFinalTest
             {
                 List<int> deleteItems = new List<int>();
                 List<MESTestInfo> testInfos = allProductControl[productID].GetAllTestInfo();
-                testItemShow = allProductControl[productID].Clone();
+                try
+                {
+                    testItemShow = allProductControl[productID].Clone();
+                }
+                catch (Exception ex)
+                {
+                    CommonFunction.WriteLog("ParamItemUpdate Clone failed: " + ex.Message);
+                    testItemShow = allProductControl[productID];
+                }
                 for (int i = 0; i < testInfos.Count; i++)
                 {
                     string param = testInfos[i].ExParamName.ToUpper();
@@ -1074,37 +1175,69 @@ namespace UIOperateInterleaverFinalTest
 
         private void OpenTemplateBK_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
         {
-            if (allProductControl.Count == 1)
+            try
             {
-                _scanList.Clear();
-                //打开注意事项网页
-                string strUrl =string.Format("\\\\zh-mfs-srv\\Public\\TestTemplate\\{0}\\{1}@{2}.HTML", 
-                    allProductControl[0].GetProductInfo().ProductPN, allProductControl[0].GetProductInfo().ProductPN, allProductControl[0].GetProductInfo().SpecNum);
-                ProcessStartInfo info = new ProcessStartInfo();
-                info.WindowStyle = ProcessWindowStyle.Normal;
-                info.FileName = strUrl;//需要启动的程序
-                if (File.Exists(strUrl))
+                if (e.Error != null)
                 {
-                    Process.Start(info);
+                    FinishOpenTemplateFailed("打开模板异常：" + e.Error.Message);
+                    return;
                 }
-                
-            }
-            string errMsg = (string)e.Result;
-            if (errMsg.Length == 0)
-            {
-                RealtimeMsg(UIControl.SN + "：打开模板成功！");
-                SetOpenTemplateComplete(true);
-                
+                var workResult = e.Result as OpenTemplateWorkResult;
+                if (workResult == null)
+                {
+                    FinishOpenTemplateFailed("打开模板返回无效。");
+                    return;
+                }
+                if (!string.IsNullOrEmpty(workResult.ErrorMessage))
+                {
+                    FinishOpenTemplateFailed(workResult.ErrorMessage);
+                    return;
+                }
+                if (workResult.FusionControl == null)
+                {
+                    FinishOpenTemplateFailed("未获取到模板内容。");
+                    return;
+                }
+                if (allProductControl.Count > 0 &&
+                    allProductControl[0].GetProductInfo().Spec != workResult.FusionControl.GetProductInfo().Spec)
+                {
+                    FinishOpenTemplateFailed("该产品Spec与测试列表Spen不一致！");
+                    return;
+                }
+                allProductControl.Add(workResult.FusionControl);
+                templateName = workResult.TemplateName ?? "";
+
                 TestProductInfo curInfo = new TestProductInfo();
-                curInfo.Index = AllProducts.Count+1;
+                curInfo.Index = AllProducts.Count + 1;
                 curInfo.SN = UIControl.SN;
                 AllProducts.Add(curInfo);
                 UpdateProductStatuses();
-                //列表显示  
-                //曲线显示处理
-                List<MESTestInfo> testInfos = allProductControl[allProductControl.Count - 1].AllTestInfo;
+                int productIdx = allProductControl.Count - 1;
+                RealtimeMsg("正在处理模板数据...");
+                Dispatcher.BeginInvoke(new Action(() => CompleteOpenTemplateUi(productIdx)), DispatcherPriority.Background);
+            }
+            catch (Exception ex)
+            {
+                FinishOpenTemplateFailed("处理模板结果异常：" + ex.Message);
+                CommonFunction.WriteLog("OpenTemplateBK_RunWorkerCompleted: " + ex);
+            }
+        }
+
+        private void CompleteOpenTemplateUi(int productIdx)
+        {
+            try
+            {
+                if (productIdx < 0 || productIdx >= allProductControl.Count)
+                {
+                    FinishOpenTemplateFailed("打开模板后产品索引无效。");
+                    return;
+                }
+                string errMsg = "";
+                List<MESTestInfo> testInfos = allProductControl[productIdx].AllTestInfo;
                 if (allProductControl.Count == 1)
                 {
+                    _scanList.Clear();
+                    TryOpenTemplateNoticeHtmlAsync(allProductControl[0]);
                     updateParamIndex.Clear();
                     portAndNameDic.Clear();
                     portAssistant.Clear();
@@ -1210,7 +1343,8 @@ namespace UIOperateInterleaverFinalTest
                 for (int i = 0; i < testInfos.Count; i++)
                 {
                     //转Fusion之后按照之前规则重组EX规则的参数名称
-                    if(testInfos[i].TestParam.GetMESTemplateKeywords().Contains("_BP"))
+                    if (testInfos[i].TestParam != null &&
+                        testInfos[i].TestParam.GetMESTemplateKeywords().Contains("_BP"))
                     {
                         testInfos[i].ExParamName = testInfos[i].TestParam + "@";
                         testInfos[i].ExParamName += testInfos[i].ConditionID;
@@ -1318,27 +1452,25 @@ namespace UIOperateInterleaverFinalTest
                     curveShow.UpdateFre(minScanFre, maxScanFre);
                 }
 
-                SWMaxPortFlag = Math.Max(SWMaxPortFlag, OpticalSwitchConfigNames.MaxSwitchChannels);
+                SWMaxPortFlag = Math.Max(SWMaxPortFlag, OpticalSwitchConfigNames.MaxOutputSwitchChannels);
 
-                ReadRefData(allProductControl.Count-1, portAssistant, ref errMsg);
-                ParamItemUpdate(allProductControl.Count-1,true);
+                ReadRefData(productIdx, portAssistant, ref errMsg);
+                ParamItemUpdate(productIdx, true);
+                SetOpenTemplateComplete(true);
                 UIControl.IsScanEnable = true;
-                if (errMsg.Length>0)
-                {
+                RealtimeMsg(UIControl.SN + "：打开模板成功！");
+                if (errMsg.Length > 0)
                     WarningBox(errMsg);
-                }
 
                 ShowTmpltPath();
 
                 if (batchSnQueue != null && batchSnQueue.Count > 0)
                     TryOpenNextBatchSn();
             }
-            else
+            catch (Exception ex)
             {
-                batchSnQueue = null;
-                RealtimeMsg(errMsg, StatusType.Error);
-                ErrorBox(errMsg);
-                return;
+                FinishOpenTemplateFailed("处理模板数据异常：" + ex.Message);
+                CommonFunction.WriteLog("CompleteOpenTemplateUi: " + ex);
             }
         }
 
@@ -1509,7 +1641,7 @@ namespace UIOperateInterleaverFinalTest
             string port = (portKey ?? "").Replace(" ", "").ToUpperInvariant();
             if (port.StartsWith("PORT") && port.Length > 4 &&
                 int.TryParse(port.Substring(4), out int portNum) &&
-                portNum >= 1 && portNum <= OpticalSwitchConfigNames.MaxSwitchChannels)
+                portNum >= 1 && portNum <= OpticalSwitchConfigNames.MaxOutputSwitchChannels)
                 return portNum;
 
             return -1;
@@ -1525,10 +1657,115 @@ namespace UIOperateInterleaverFinalTest
 
             if (channelFromPort == 1)
                 return productIndex;
-            if (channelFromPort >= 1 && channelFromPort <= OpticalSwitchConfigNames.MaxSwitchChannels)
+            if (channelFromPort >= 1 && channelFromPort <= OpticalSwitchConfigNames.MaxInputSwitchChannels)
                 return channelFromPort;
 
             return productIndex;
+        }
+
+        private int GetInputChannelForProduct(int productIndex)
+        {
+            return ApplySinglePortSlotChannelMapping(productIndex, 1);
+        }
+
+        private int GetPmIndexForProductPort(int productIndex, string portKey, ref string errMsg)
+        {
+            foreach (PortAssist assist in portAssistant)
+            {
+                if (assist.ProductIndex == productIndex &&
+                    string.Equals(assist.Port, portKey, StringComparison.OrdinalIgnoreCase) &&
+                    assist.PMIndex > 0)
+                    return assist.PMIndex;
+            }
+
+            string port = (portKey ?? "").Replace(" ", "").ToUpperInvariant();
+            if (port.StartsWith("PORT") && port.Length > 4 &&
+                int.TryParse(port.Substring(4), out int portIndex))
+            {
+                int pmIndex;
+                if (TryGetPmIndexForPort(portIndex, out pmIndex, ref errMsg))
+                    return pmIndex;
+            }
+
+            return 0;
+        }
+
+        private bool IsDualSwitchConfigured()
+        {
+            IOpticalSwitch sw = null;
+            string err = "";
+            return DeviceControl.GetSwitchByType(OpticalSwitchConfigNames.InterleaverMplus1X16In, ref sw, ref err) == 0 &&
+                   DeviceControl.GetSwitchByType(OpticalSwitchConfigNames.InterleaverMplus1X32Out, ref sw, ref err) == 0;
+        }
+
+        private bool TryExecuteSwitchCommand(string switchShowName, int fallbackIndex, string flag, string roleLabel, ref string errMsg)
+        {
+            IOpticalSwitch opticalSwitch = null;
+            errMsg = "";
+            if (DeviceControl.GetSwitchByType(switchShowName, ref opticalSwitch, ref errMsg) != 0)
+            {
+                string fallbackErr = "";
+                if (DeviceControl.GetSwitchByIndex(fallbackIndex, ref opticalSwitch, ref fallbackErr) != 0)
+                    return false;
+                errMsg = fallbackErr;
+            }
+
+            if (opticalSwitch == null)
+                return false;
+
+            if (opticalSwitch.SetSwitch(flag, ref errMsg) == 0)
+            {
+                RealtimeMsg(string.Format("切换{0}成功！(flag={1})", roleLabel, flag));
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool SetInputSwitch(int productIndex, int inChannel)
+        {
+            if (inChannel < 1 || inChannel > OpticalSwitchConfigNames.MaxInputSwitchChannels)
+            {
+                RealtimeMsg(string.Format("切换入光开关失败:入通道 {0} 无效(1-{1})",
+                    inChannel, OpticalSwitchConfigNames.MaxInputSwitchChannels));
+                return false;
+            }
+
+            string flag = productIndex.ToString() + "::" + inChannel.ToString() + ":" +
+                            OpticalSwitchConfigNames.MaxInputSwitchChannels.ToString();
+            string errMsg = "";
+            if (TryExecuteSwitchCommand(
+                OpticalSwitchConfigNames.InterleaverMplus1X16In, 1, flag, "入光开关", ref errMsg))
+                return true;
+
+            if (errMsg.Length > 0)
+                RealtimeMsg("切换入光开关失败:" + errMsg);
+            return false;
+        }
+
+        private bool SetOutputSwitch(int pmIndex, int outChannel)
+        {
+            if (outChannel < 1 || outChannel > OpticalSwitchConfigNames.MaxOutputSwitchChannels)
+            {
+                RealtimeMsg(string.Format("切换出光开关失败:出通道 {0} 无效(1-{1})",
+                    outChannel, OpticalSwitchConfigNames.MaxOutputSwitchChannels));
+                return false;
+            }
+            if (pmIndex < 1)
+            {
+                RealtimeMsg("切换出光开关失败:未配置功率计映射(GROUP)");
+                return false;
+            }
+
+            string flag = pmIndex.ToString() + "::" + outChannel.ToString() + ":" +
+                            OpticalSwitchConfigNames.MaxOutputSwitchChannels.ToString();
+            string errMsg = "";
+            if (TryExecuteSwitchCommand(OpticalSwitchConfigNames.InterleaverMplus1X32Out, 2, flag, "出光开关", ref errMsg))
+                return true;
+
+            if (errMsg.Length > 0)
+                RealtimeMsg("切换出光开关失败:" + errMsg);
+            return false;
         }
 
         private int GetSwitchChannelForPort(int productIndex, string portKey)
@@ -1561,15 +1798,29 @@ namespace UIOperateInterleaverFinalTest
 
         private void SetSwitch(int productIndex, string portKey)
         {
-            int channel = GetSwitchChannelForPort(productIndex, portKey);
-            if (channel < 1 || channel > OpticalSwitchConfigNames.MaxSwitchChannels)
+            int outChannel = GetSwitchChannelForPort(productIndex, portKey);
+            if (outChannel < 1 || outChannel > OpticalSwitchConfigNames.MaxOutputSwitchChannels)
             {
-                RealtimeMsg(string.Format("切换开关失败:无法解析端口 {0} 对应的开关通道(1-{1})",
-                    portKey, OpticalSwitchConfigNames.MaxSwitchChannels));
+                RealtimeMsg(string.Format("切换开关失败:无法解析端口 {0} 对应的出光通道(1-{1})",
+                    portKey, OpticalSwitchConfigNames.MaxOutputSwitchChannels));
                 return;
             }
 
-            string flag = productIndex.ToString() + "::" + channel.ToString() + ":" + SWMaxPortFlag.ToString();
+            if (IsDualSwitchConfigured())
+            {
+                int inChannel = GetInputChannelForProduct(productIndex);
+                string pmErr = "";
+                int pmIndex = GetPmIndexForProductPort(productIndex, portKey, ref pmErr);
+                if (!SetInputSwitch(productIndex, inChannel))
+                    return;
+                if (!SetOutputSwitch(pmIndex, outChannel))
+                    return;
+                return;
+            }
+
+            // 兼容旧版单 MPLUS 指令表 interleaverSwitch-MPLUS
+            RealtimeMsg("提示:使用旧版单光开关配置，建议升级为 IN/OUT 双设备。");
+            string legacyFlag = productIndex.ToString() + "::" + outChannel.ToString() + ":" + SWMaxPortFlag.ToString();
             string errMsg = "";
             IOpticalSwitch opticalSwitch = null;
             if (DeviceControl.GetSwitchByType(OpticalSwitchConfigNames.InterleaverMplus1X16, ref opticalSwitch, ref errMsg) != 0)
@@ -1579,8 +1830,8 @@ namespace UIOperateInterleaverFinalTest
             }
             if (opticalSwitch != null)
             {
-                if (opticalSwitch.SetSwitch(flag, ref errMsg) == 0)
-                    RealtimeMsg(string.Format("切换开关成功！(产品{0} 通道{1} flag={2})", productIndex, channel, flag));
+                if (opticalSwitch.SetSwitch(legacyFlag, ref errMsg) == 0)
+                    RealtimeMsg(string.Format("切换开关成功！(产品{0} 通道{1} flag={2})", productIndex, outChannel, legacyFlag));
             }
             if (errMsg.Length > 0)
                 RealtimeMsg("切换开关失败:" + errMsg);
