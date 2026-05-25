@@ -105,6 +105,12 @@ namespace ConfigModel
             foreach(DeviceConfig config in configList)
             {
                 XmlNode node = xmlDoc.CreateElement("Device");
+                if (!string.IsNullOrEmpty(config.ShowName))
+                {
+                    XmlAttribute nameAttr = xmlDoc.CreateAttribute("name");
+                    nameAttr.InnerText = config.ShowName;
+                    node.Attributes.Append(nameAttr);
+                }
                 parentNode.AppendChild(node);
                 if (config.ControlName != "")
                 {
@@ -113,6 +119,10 @@ namespace ConfigModel
                 if(config.ChannelCount!="")
                 {
                     CreateNode(xmlDoc, node, "channel", config.ChannelCount,"");
+                }
+                if (!string.IsNullOrEmpty(config.CheckCmd))
+                {
+                    CreateNode(xmlDoc, node, "check", config.CheckCmd, "");
                 }
                 for (int i = 0; i < config.ControlMaxCount; i++)
                 {

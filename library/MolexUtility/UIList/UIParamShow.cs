@@ -544,6 +544,101 @@ namespace MolexUtility.UIList
         }
 
         /// <summary>
+        /// 将测试项参数列按优先顺序重排；锚点列（如 TDL）与优先列置于参数区最前，其余列保持原相对顺序。
+        /// </summary>
+        /// <param name="priorityColumnNames">优先列名（按显示顺序，支持 MaxIL 匹配 MaxIL@ITU 等）</param>
+        /// <param name="leadingFixedCount">左侧固定列数量（如温度、PORT）</param>
+        /// <param name="trailingFixedCount">右侧固定列数量（如 SN、末尾填充列）</param>
+        /// <param name="insertAfterColumnName">锚点列名（如 TDL）；为 null 时仅将优先列排在参数区最前</param>
+        public void ReorderParamColumns(IReadOnlyList<string> priorityColumnNames, int leadingFixedCount, int trailingFixedCount, string insertAfterColumnName = null)
+        {
+            if (paramShow == null || priorityColumnNames == null || priorityColumnNames.Count == 0)
+                return;
+
+            DataGridViewColumnCollection columns = paramShow.Columns;
+            int paramDisplayEnd = columns.Count - trailingFixedCount;
+            if (paramDisplayEnd <= leadingFixedCount)
+                return;
+
+            var paramColumns = columns.Cast<DataGridViewColumn>()
+                .Where(c => c.DisplayIndex >= leadingFixedCount && c.DisplayIndex < paramDisplayEnd)
+                .OrderBy(c => c.DisplayIndex)
+                .ToList();
+            if (paramColumns.Count == 0)
+                return;
+
+            var priorityColumns = new List<DataGridViewColumn>();
+            var prioritySet = new HashSet<DataGridViewColumn>();
+            foreach (string name in priorityColumnNames)
+            {
+                foreach (DataGridViewColumn col in paramColumns)
+                {
+                    if (prioritySet.Contains(col))
+                        continue;
+                    if (ColumnMatchesParamName(col.Name, name))
+                    {
+                        priorityColumns.Add(col);
+                        prioritySet.Add(col);
+                    }
+                }
+            }
+
+            DataGridViewColumn anchorColumn = null;
+            if (!string.IsNullOrEmpty(insertAfterColumnName))
+            {
+                anchorColumn = paramColumns.FirstOrDefault(c => ColumnMatchesParamName(c.Name, insertAfterColumnName));
+            }
+
+            var ordered = new List<DataGridViewColumn>();
+            if (anchorColumn != null)
+            {
+                ordered.Add(anchorColumn);
+                ordered.AddRange(priorityColumns);
+                foreach (DataGridViewColumn col in paramColumns)
+                {
+                    if (col != anchorColumn && !prioritySet.Contains(col))
+                        ordered.Add(col);
+                }
+            }
+            else
+            {
+                ordered.AddRange(priorityColumns);
+                foreach (DataGridViewColumn col in paramColumns)
+                {
+                    if (!prioritySet.Contains(col))
+                        ordered.Add(col);
+                }
+            }
+
+            if (ordered.Count != paramColumns.Count)
+                return;
+
+            // DisplayIndex 必须在 [0, ColumnCount-1] 内；从右到左赋最终位置，避免列互相抢占
+            for (int i = ordered.Count - 1; i >= 0; i--)
+                ordered[i].DisplayIndex = leadingFixedCount + i;
+        }
+
+        private static string GetParamBaseName(string columnName)
+        {
+            if (string.IsNullOrEmpty(columnName))
+                return columnName;
+            int at = columnName.IndexOf('@');
+            if (at >= 0)
+                return columnName.Substring(0, at);
+            int semi = columnName.IndexOf(';');
+            if (semi >= 0)
+                return columnName.Substring(0, semi);
+            return columnName;
+        }
+
+        private static bool ColumnMatchesParamName(string columnName, string paramName)
+        {
+            if (string.IsNullOrEmpty(columnName) || string.IsNullOrEmpty(paramName))
+                return false;
+            return string.Equals(GetParamBaseName(columnName), GetParamBaseName(paramName), StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
         /// 清除所有数据
         /// </summary>
         public void ClearAllData()

@@ -240,6 +240,13 @@ namespace DeviceControl
                         else if (config.ControlName == Devices.MPLUSSwitch.GetAdditional())
                         {
                             string err = "";
+                            string switchCmdFile = Path.Combine(Environment.CurrentDirectory, "switch",
+                                OpticalSwitchConfigNames.SanitizeMplusSwitchShowName(config.ShowName));
+                            if (!File.Exists(switchCmdFile))
+                            {
+                                errMsg += string.Format("光源盒 {0}: 指令配置文件不存在 {1}\r", config.ShowName, switchCmdFile);
+                                MolexUtility.CommonFunction.WriteLog(string.Format("MPLUS switch cmd file missing: {0}", switchCmdFile));
+                            }
                             SwitchMPLUS mplusSwitch = new SwitchMPLUS(config.Control[0], config.Control[1], config.ShowName, ref err);
                             if (err.Length == 0)
                                 opticalSwitchs.Add(mplusSwitch);

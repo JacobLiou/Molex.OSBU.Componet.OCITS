@@ -32,6 +32,16 @@ namespace MolexUtility.Device
         public const int MaxProductsSinglePort = 16;
 
         /// <summary>
+        /// 规范化光开关指令文件名（去空格/BOM，修复 MPLUS 名称被误加空格）。
+        /// </summary>
+        public static string SanitizeMplusSwitchShowName(string showName)
+        {
+            if (string.IsNullOrWhiteSpace(showName))
+                return showName ?? "";
+            return showName.Trim().Replace(" ", "");
+        }
+
+        /// <summary>
         /// 迁移旧 ShowName；双 MPLUS 时仅将空名或旧单文件名按列表顺序映射为 IN/OUT。
         /// </summary>
         public static void NormalizeMplusSwitchShowName(List<List<DeviceConfig>> deviceConfigs)
@@ -63,6 +73,7 @@ namespace MolexUtility.Device
                 int legacyIndex = 0;
                 foreach (DeviceConfig cfg in mplusList)
                 {
+                    cfg.ShowName = SanitizeMplusSwitchShowName(cfg.ShowName);
                     if (string.IsNullOrWhiteSpace(cfg.ShowName) ||
                         InterleaverMplus1X16.Equals(cfg.ShowName, StringComparison.OrdinalIgnoreCase))
                     {

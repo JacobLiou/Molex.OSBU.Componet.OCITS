@@ -67,7 +67,7 @@
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
-                                <GridViewColumn Header="SN (最多16)" Width="200" DisplayMemberBinding="{Binding SN}"/>
+                                <GridViewColumn Header="SN (最多16)" Width="120" DisplayMemberBinding="{Binding SN}"/>
                             </GridView>
                         </ListView.View>
                     </ListView>

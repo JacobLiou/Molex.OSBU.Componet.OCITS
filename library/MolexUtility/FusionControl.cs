@@ -429,6 +429,12 @@ namespace MolexUtility
         public static bool UploadRefCalibrationTime(string userID, ref string errMsg)
         {
             errMsg = "";
+            if (TasRuntimeConfig.IsUploadRefCalibrationDisabled())
+            {
+                CommonFunction.WriteLog("[TMS] 跳过 UploadTestSystemCailbrationTime（存在 set\\DisableUploadRefCalibrationToTms.txt）。");
+                return true;
+            }
+
             if (string.IsNullOrWhiteSpace(userID))
             {
                 errMsg = "用户工号为空，无法上传归零时间。";
@@ -437,18 +443,22 @@ namespace MolexUtility
 
             try
             {
+                CommonFunction.WriteLog(string.Format("[TMS] UploadTestSystemCailbrationTime begin, UserID={0}", userID));
                 USLTASLibraryInterface tas = new USLTASLibraryInterface();
                 if (!tas.UploadTestSystemCailbrationTime(userID, ref errMsg))
                 {
                     if (string.IsNullOrEmpty(errMsg))
                         errMsg = "UploadTestSystemCailbrationTime 返回失败。";
+                    CommonFunction.WriteLog("[TMS] UploadTestSystemCailbrationTime failed: " + errMsg);
                     return false;
                 }
+                CommonFunction.WriteLog("[TMS] UploadTestSystemCailbrationTime success.");
                 return true;
             }
             catch (Exception ex)
             {
                 errMsg = ex.Message;
+                CommonFunction.WriteLog("[TMS] UploadTestSystemCailbrationTime exception: " + ex);
                 return false;
             }
         }

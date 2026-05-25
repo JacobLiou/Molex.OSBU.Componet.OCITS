@@ -50,7 +50,8 @@ namespace DeviceControl
                 List<string> cmdList = new List<string>();
                 if (GetCmdByFlag(flag, ref cmdList, ref errMsg) != 0)
                 {
-                    errMsg = "光源盒 error：未找到指令配置文件：" + flag;
+                    if (string.IsNullOrEmpty(errMsg))
+                        errMsg = "光源盒 error：未找到指令配置文件：" + flag;
                     return 1;
                 }
                 for (int i = 0; i < cmdList.Count; i++)
