@@ -110,7 +110,7 @@
 | SwitchMini1X8 | Min1X8Switch | 十六进制帧 `*...\r` + 校验和 |
 | SwitchPbox | PboxSwitch | 同上 |
 | SwitchOMS | OMSSwitch | ASCII + CRLF，`OK` 应答 |
-| **SwitchMPLUS** | **MPLUSSwitch** | **RS232 MSW 协议**，ASCII + CRLF；ITL FTS **双设备**（入 16 / 出 32） |
+| **SwitchMPLUS** | **MPLUSSwitch** | **RS232 MSW 协议**，ASCII + CRLF；ITL FTS **双盒**（入 1×16 / 出 1×32） |
 | Switch3STD | （需配置） | 十六进制（工程内有，按工位选用） |
 | UDLSwitch | UDLSwitch | 走 UDL 引擎 |
 
@@ -120,7 +120,10 @@
 - 设备配置：光源盒 **两条** MPLUS — `interleaverSwitch-MPLUS-IN`（COM1）、`interleaverSwitch-MPLUS-OUT`（COM2）
 - 指令表示例：`doc/switch/ITL_MPLUS_SW_IN.example`、`doc/switch/ITL_MPLUS_SW_OUT.example` → `{运行目录}\switch\{ShowName}`
 - 入光 Flag：`产品序号::入通道:16`（如 `3::3:16`）；出光 Flag：`PM序号::出通道:32`（如 `1::5:32`）
-- MSW 需与现场拓扑一致（见 `doc/OpticalSwitchController.cs`、`doc/物理拓扑图.png`）；切换时先入后出
+- 入光 MSW（SW1 级联）：ch1~8 → `MSW 1,1,2;9,1,n`；ch9~16 → `MSW 1,1,1;10,1,n`；见 `doc/1X8.jpg`、`switch\interleaverSwitch-MPLUS-IN`
+- 出光 MSW（SW1/SW2 级联）：ch1~8 → `1,1,2;9`；9~16 → `1,1,1;10`；17~24 → `2,1,2;11`；25~32 → `2,1,1;12`；见 `doc/1X16.png`、`switch\interleaverSwitch-MPLUS-OUT`
+- **Demux 单 SN 双口**：入光均 `1::1:16`；出光 Even `1::1:32`、Odd `2::17:32`（模块9/11，非 `PORT2→ch2`）
+- 切换时先入后出
 - UI 端口名映射：`OperateInteleaverFinalTest` 中 `L3-4`…`L4-1` → 出通道 1–16
 
 ### 3.5 一次会话的主流程（终测）

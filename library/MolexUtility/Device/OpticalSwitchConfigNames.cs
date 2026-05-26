@@ -31,6 +31,12 @@ namespace MolexUtility.Device
         /// <summary>单端口模式下最多并行 SN 数（16 SN × 1 路）</summary>
         public const int MaxProductsSinglePort = 16;
 
+        /// <summary>Demux Even（PORT1）出光通道 — 模块 9 首路</summary>
+        public const int DemuxEvenOutputChannel = 1;
+
+        /// <summary>Demux Odd（PORT2）出光通道 — 模块 11 首路（SW2 上路）</summary>
+        public const int DemuxOddOutputChannel = 17;
+
         /// <summary>
         /// 规范化光开关指令文件名（去空格/BOM，修复 MPLUS 名称被误加空格）。
         /// </summary>

@@ -4,13 +4,13 @@
   <DeviceConfig name="光源盒">
     <Device name="interleaverSwitch-MPLUS-IN">
       <Type>MPLUSSwitch</Type>
-      <check>MSW 1,1,2;2,1,1;</check>
+      <check>MSW 1,1,2;9,1,1;</check>
       <control0 name="COM">COM1</control0>
       <control1 name="波特率">115200</control1>
     </Device>
     <Device name="interleaverSwitch-MPLUS-OUT">
       <Type>MPLUSSwitch</Type>
-      <check>MSW 9,1,1;</check>
+      <check>MSW 1,1,2;9,1,1;</check>
       <control0 name="COM">COM2</control0>
       <control1 name="波特率">115200</control1>
     </Device>

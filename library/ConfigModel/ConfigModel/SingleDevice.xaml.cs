@@ -233,7 +233,7 @@ namespace ConfigModel
                 string cmd = (selectDevice.CheckCmd ?? "").Trim();
                 if (string.IsNullOrEmpty(cmd))
                 {
-                    cmd = GetDefaultCheckCmd(selectDevice.ControlName);
+                    cmd = GetDefaultCheckCmd(selectDevice.ControlName, selectDevice.ShowName);
                     if (string.IsNullOrEmpty(cmd))
                     {
                         MessageBox.Show("请在「确定命令」中填写测试指令后再测试。", "设备测试", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -303,10 +303,16 @@ namespace ConfigModel
             configInfo.ItemsSource = itemSelect;
         }
 
-        private static string GetDefaultCheckCmd(string controlName)
+        private static string GetDefaultCheckCmd(string controlName, string showName)
         {
             if (controlName == Devices.MPLUSSwitch.GetAdditional())
+            {
+                if (OpticalSwitchConfigNames.InterleaverMplus1X32Out.Equals(
+                        OpticalSwitchConfigNames.SanitizeMplusSwitchShowName(showName),
+                        StringComparison.OrdinalIgnoreCase))
+                    return "MSW 1,1,2;9,1,1;";
                 return "MSW 1,1,2;9,1,1;";
+            }
             if (controlName == Devices.OMSSwitch.GetAdditional())
                 return "*IDN?";
             return "";

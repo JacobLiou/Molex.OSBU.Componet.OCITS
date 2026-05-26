@@ -31,6 +31,7 @@ using ProtocolAggregator;
 using MolexUtility.UIList;
 using System.Runtime.InteropServices;
 using System.Diagnostics;
+using Path = System.IO.Path;
 //172.16.143.20
 
 namespace UIOperateInterleaverFinalTest
@@ -1409,8 +1410,7 @@ namespace UIOperateInterleaverFinalTest
                             //else
                             //assist.PMIndex = assist.PortIndex;
                             assist.TmptID = testInfos[i].EnvironmentID;
-                            int switchChannel = ResolveSwitchChannel(assist.Name, assist.Port);
-                            assist.SwitchChannel = ApplySinglePortSlotChannelMapping(assist.ProductIndex, switchChannel);
+                            assist.SwitchChannel = ResolveOutputSwitchChannelAtTemplateLoad(assist);
                             portAssistant.Add(assist);
 
                             if (SWMaxPortFlag < Convert.ToInt32(assist.Port.Remove(0, 4)))
@@ -1594,15 +1594,31 @@ namespace UIOperateInterleaverFinalTest
                     //切换光源盒
                     if (GetIsScanFinished())
                     {
-                        string switchErr = "";
-                        if (!SetSwitch(portAssistant[referenceIndex].ProductIndex, portAssistant[referenceIndex].Port, ref switchErr))
+                        PortAssist refAssist = portAssistant[referenceIndex];
+                        if (TasRuntimeConfig.IsRefAutoSwitchDisabled())
                         {
-                            ErrorBox(string.IsNullOrEmpty(switchErr) ? "切换光开关失败。" : switchErr);
-                            UIControl.IsScanEnable = true;
-                            UIControl.IsReferenceEnable = true;
-                            break;
+                            if (!ShowManualRefSwitchPrompt(refAssist))
+                            {
+                                UIControl.IsScanEnable = true;
+                                UIControl.IsReferenceEnable = true;
+                                break;
+                            }
+                            RealtimeMsg("手动光路模式：已跳过自动光开关，请确认入光/出光盒 MSW 与弹窗 flag 一致。");
                         }
-                        int portIndex = portAssistant[referenceIndex].PortIndex;
+                        else
+                        {
+                            string switchErr = "";
+                            if (!SetSwitch(refAssist.ProductIndex, refAssist.Port, ref switchErr))
+                            {
+                                ErrorBox(string.IsNullOrEmpty(switchErr) ? "切换光开关失败。" : switchErr);
+                                UIControl.IsScanEnable = true;
+                                UIControl.IsReferenceEnable = true;
+                                break;
+                            }
+                        }
+
+                        ReadRefPowerSnapshot(refAssist);
+                        int portIndex = refAssist.PortIndex;
                         SetIsScanFinished(false);
                         RealtimeMsg(prompt);
                         BackgroundWorker bkPM = new BackgroundWorker();
@@ -1611,7 +1627,7 @@ namespace UIOperateInterleaverFinalTest
                         scanDetailInfo.ScanType = SCANTYPE.RefWithPDL;
                         scanDetailInfo.Ports.Clear();
                         scanDetailInfo.Ports.Add(portIndex);
-                        scanDetailInfo.ProductIndex = portAssistant[referenceIndex].ProductIndex;
+                        scanDetailInfo.ProductIndex = refAssist.ProductIndex;
                         bkPM.RunWorkerAsync(scanDetailInfo);
                         UIControl.IsScanEnable = false;
                         UIControl.IsReferenceEnable = false;
@@ -1717,6 +1733,109 @@ namespace UIOperateInterleaverFinalTest
             return ApplySinglePortSlotChannelMapping(productIndex, 1);
         }
 
+        /// <summary>
+        /// 单 SN + 多 PORT（如 Demux Even/Odd）：一口入、两口出，入光固定 SN 槽位。
+        /// </summary>
+        private bool IsSingleProductMultiPortMode()
+        {
+            return allProductControl.Count == 1 && portAndNameDic.Count >= 2;
+        }
+
+        private static int TryParsePortIndex(string portKey)
+        {
+            string port = (portKey ?? "").Replace(" ", "").ToUpperInvariant();
+            if (port.StartsWith("PORT") && port.Length > 4 &&
+                int.TryParse(port.Substring(4), out int portIndex))
+                return portIndex;
+            return 0;
+        }
+
+        /// <summary>
+        /// Demux 双口：PORT1→模块9(ch1)，PORT2→模块11(ch17)。
+        /// </summary>
+        private static int GetDemuxOutputChannelForPortIndex(int portIndex)
+        {
+            if (portIndex == 1)
+                return OpticalSwitchConfigNames.DemuxEvenOutputChannel;
+            if (portIndex == 2)
+                return OpticalSwitchConfigNames.DemuxOddOutputChannel;
+            return -1;
+        }
+
+        /// <summary>
+        /// 入光通道：Demux 单 SN 双口固定一口入；多口产品按 PORT/L 名解析；否则回退 SN 槽位映射。
+        /// </summary>
+        private int GetInputChannelForProductPort(int productIndex, string portKey)
+        {
+            if (IsSingleProductMultiPortMode())
+                return GetInputChannelForProduct(productIndex);
+
+            int ch = ResolvePortChannelWithoutDemuxOverride(productIndex, portKey);
+            if (ch >= 1 && ch <= OpticalSwitchConfigNames.MaxInputSwitchChannels)
+                return ch;
+            return GetInputChannelForProduct(productIndex);
+        }
+
+        /// <summary>
+        /// 按 PORT/L 解析通道（不含 Demux 出光 9/11 映射）。
+        /// </summary>
+        private int ResolvePortChannelWithoutDemuxOverride(int productIndex, string portKey)
+        {
+            foreach (PortAssist assist in portAssistant)
+            {
+                if (assist.ProductIndex == productIndex &&
+                    string.Equals(assist.Port, portKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    int channel = ResolveSwitchChannel(assist.Name, assist.Port);
+                    return ApplySinglePortSlotChannelMapping(productIndex, channel);
+                }
+            }
+            int fallback = ResolveSwitchChannel(null, portKey);
+            return ApplySinglePortSlotChannelMapping(productIndex, fallback);
+        }
+
+        /// <summary>
+        /// 打开模板时写入 PortAssist.SwitchChannel（与运行时出光通道一致）。
+        /// </summary>
+        private int ResolveOutputSwitchChannelAtTemplateLoad(PortAssist assist)
+        {
+            if (allProductControl.Count == 1 && portAndNameDic.Count >= 2)
+            {
+                int demuxCh = GetDemuxOutputChannelForPortIndex(assist.PortIndex);
+                if (demuxCh > 0)
+                    return demuxCh;
+            }
+            int switchChannel = ResolveSwitchChannel(assist.Name, assist.Port);
+            return ApplySinglePortSlotChannelMapping(assist.ProductIndex, switchChannel);
+        }
+
+        /// <summary>
+        /// 出光通道：Demux 映射模块9/11；否则按 L 名 / PORTn / 槽位解析。
+        /// </summary>
+        private int GetOutputChannelForProductPort(int productIndex, string portKey)
+        {
+            if (IsSingleProductMultiPortMode())
+            {
+                int demuxCh = GetDemuxOutputChannelForPortIndex(TryParsePortIndex(portKey));
+                if (demuxCh > 0)
+                    return demuxCh;
+            }
+
+            foreach (PortAssist assist in portAssistant)
+            {
+                if (assist.ProductIndex == productIndex &&
+                    string.Equals(assist.Port, portKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (assist.SwitchChannel > 0)
+                        return assist.SwitchChannel;
+                    int channel = ResolveSwitchChannel(assist.Name, assist.Port);
+                    return ApplySinglePortSlotChannelMapping(productIndex, channel);
+                }
+            }
+            int fallback = ResolveSwitchChannel(null, portKey);
+            return ApplySinglePortSlotChannelMapping(productIndex, fallback);
+        }
+
         private int GetPmIndexForProductPort(int productIndex, string portKey, ref string errMsg)
         {
             foreach (PortAssist assist in portAssistant)
@@ -1745,6 +1864,162 @@ namespace UIOperateInterleaverFinalTest
             string err = "";
             return DeviceControl.GetSwitchByType(OpticalSwitchConfigNames.InterleaverMplus1X16In, ref sw, ref err) == 0 &&
                    DeviceControl.GetSwitchByType(OpticalSwitchConfigNames.InterleaverMplus1X32Out, ref sw, ref err) == 0;
+        }
+
+        /// <summary>
+        /// 入光盒 MSW：SW1 级联选路（1,1,2=绿灯上路→模块9；1,1,1=红灯下路→模块10）+ 1×8 选通道。
+        /// </summary>
+        private static string FormatInputMplusMswForChannel(int inChannel)
+        {
+            if (inChannel < 1 || inChannel > OpticalSwitchConfigNames.MaxInputSwitchChannels)
+                return "";
+            if (inChannel <= 8)
+                return string.Format("MSW 1,1,2;9,1,{0};", inChannel);
+            return string.Format("MSW 1,1,1;10,1,{0};", inChannel - 8);
+        }
+
+        /// <summary>
+        /// 出光盒 MSW：SW1/SW2 级联（1,1,2/1,1,1→模块9/10；2,1,2/2,1,1→模块11/12）+ 1×8 选通道。
+        /// </summary>
+        private static string FormatOutputMplusMswForChannel(int outChannel)
+        {
+            if (outChannel < 1 || outChannel > OpticalSwitchConfigNames.MaxOutputSwitchChannels)
+                return "";
+            if (outChannel <= 8)
+                return string.Format("MSW 1,1,2;9,1,{0};", outChannel);
+            if (outChannel <= 16)
+                return string.Format("MSW 1,1,1;10,1,{0};", outChannel - 8);
+            if (outChannel <= 24)
+                return string.Format("MSW 2,1,2;11,1,{0};", outChannel - 16);
+            return string.Format("MSW 2,1,1;12,1,{0};", outChannel - 24);
+        }
+
+        /// <summary>
+        /// 手动光路对比实验：弹窗显示程序本应下发的 flag，操作员确认后返回 true。
+        /// </summary>
+        private bool ShowManualRefSwitchPrompt(PortAssist assist)
+        {
+            if (assist == null)
+                return false;
+
+            int productIndex = assist.ProductIndex;
+            string portKey = assist.Port;
+            int outChannel = GetOutputChannelForProductPort(productIndex, portKey);
+            string pmErr = "";
+            int pmIndex = GetPmIndexForProductPort(productIndex, portKey, ref pmErr);
+            int inChannel = GetInputChannelForProductPort(productIndex, portKey);
+
+            string switchDir = Path.Combine(Environment.CurrentDirectory, "switch");
+            StringBuilder body = new StringBuilder();
+            body.AppendLine("【手动光路模式】已跳过自动光开关。");
+            body.AppendLine(string.Format("产品 {0}，通道 {1}，端口 {2}", productIndex, assist.Name, portKey));
+            body.AppendLine();
+            body.AppendLine("请在外部串口/工具对入光盒、出光盒手动下发 MSW 后点「确定」。");
+            body.AppendLine("下表为程序自动模式将使用的 flag（可在 switch 指令表中查找对应 MSW 行）：");
+            body.AppendLine();
+
+            if (IsDualSwitchConfigured())
+            {
+                string inFlag = productIndex.ToString() + "::" + inChannel.ToString() + ":" +
+                                OpticalSwitchConfigNames.MaxInputSwitchChannels.ToString();
+                body.AppendLine("入光盒（1×16 级联：ch1~8 → MSW 1,1,2;9,1,n；ch9~16 → MSW 1,1,1;10,1,n）：");
+                body.AppendLine("  flag = " + inFlag);
+                body.AppendLine("  MSW = " + FormatInputMplusMswForChannel(inChannel));
+                body.AppendLine("  文件 = " + Path.Combine(switchDir, OpticalSwitchConfigNames.InterleaverMplus1X16In));
+                if (pmIndex >= 1)
+                {
+                    string outFlag = pmIndex.ToString() + "::" + outChannel.ToString() + ":" +
+                                     OpticalSwitchConfigNames.MaxOutputSwitchChannels.ToString();
+                    body.AppendLine("出光盒（1×32 级联：ch1~8→1,1,2;9 / 9~16→1,1,1;10 / 17~24→2,1,2;11 / 25~32→2,1,1;12）：");
+                    body.AppendLine("  flag = " + outFlag);
+                    body.AppendLine("  MSW = " + FormatOutputMplusMswForChannel(outChannel));
+                    body.AppendLine("  文件 = " + Path.Combine(switchDir, OpticalSwitchConfigNames.InterleaverMplus1X32Out));
+                }
+                else
+                {
+                    body.AppendLine("出光盒：未配置 GROUP 功率计映射 — " + pmErr);
+                }
+                body.AppendLine();
+                body.AppendLine(string.Format("（参考）出光通道 outChannel={0}，入光通道 inChannel={1}", outChannel, inChannel));
+            }
+            else
+            {
+                string legacyFlag = productIndex.ToString() + "::" + outChannel.ToString() + ":" + SWMaxPortFlag.ToString();
+                body.AppendLine("单盒/旧版 MPLUS：");
+                body.AppendLine("  flag = " + legacyFlag);
+                body.AppendLine("  文件 = " + Path.Combine(switchDir, OpticalSwitchConfigNames.InterleaverMplus1X16));
+            }
+
+            RealtimeMsg(string.Format("手动光路：产品{0} {1} 预期入通道{2} 出通道{3} PM{4}",
+                productIndex, assist.Name, inChannel, outChannel, pmIndex > 0 ? pmIndex.ToString() : "?"));
+
+            return MessageBox.Show(body.ToString(), "手动光路 — 请切换开关", MessageBoxButton.OKCancel,
+                MessageBoxImage.Information) == MessageBoxResult.OK;
+        }
+
+        /// <summary>
+        /// 归零扫描前读取功率计瞬时功率（用于手动光路对比实验）。
+        /// </summary>
+        private void ReadRefPowerSnapshot(PortAssist assist)
+        {
+            if (assist == null || DeviceControl == null)
+                return;
+
+            HashSet<int> pmIndices = new HashSet<int>();
+            string pmErr = "";
+            int curPm = GetPmIndexForProductPort(assist.ProductIndex, assist.Port, ref pmErr);
+            if (curPm > 0)
+                pmIndices.Add(curPm);
+            if (assist.PMIndex > 0)
+                pmIndices.Add(assist.PMIndex);
+
+            foreach (int pm in portAndPMDic.Values)
+            {
+                if (pm > 0)
+                    pmIndices.Add(pm);
+            }
+
+            if (pmIndices.Count == 0)
+            {
+                RealtimeMsg("手动光路功率：未配置 GROUP 功率计映射，请用扫描结果判断是否有光。");
+                return;
+            }
+
+            List<string> powerLines = new List<string>();
+            List<RealtimePowerInfo> realtimePowers = new List<RealtimePowerInfo>();
+            foreach (int pmIndex in pmIndices.OrderBy(i => i))
+            {
+                IPowermeter pm = null;
+                int channel = 0;
+                string errMsg = "";
+                if (DeviceControl.GetPowermeterByIndex(pmIndex, ref channel, ref pm, ref errMsg) != 0 || pm == null)
+                {
+                    powerLines.Add(string.Format("PM{0}=（设备未配置）", pmIndex));
+                    continue;
+                }
+
+                List<double> powerAvgs;
+                if (pm.ReadPowerAvg(ref errMsg, out powerAvgs, 3, false, channel.ToString()) != 0 ||
+                    powerAvgs == null || powerAvgs.Count == 0)
+                {
+                    powerLines.Add(string.Format("PM{0}=读数失败", pmIndex));
+                    continue;
+                }
+
+                double dbm = powerAvgs[0];
+                powerLines.Add(string.Format("PM{0}={1:F2} dBm", pmIndex, dbm));
+                RealtimePowerInfo info = new RealtimePowerInfo();
+                info.Prefix = "PM" + pmIndex;
+                info.Power = dbm.ToString("F2") + " dBm";
+                realtimePowers.Add(info);
+            }
+
+            string summary = "手动光路功率：" + string.Join(", ", powerLines);
+            RealtimeMsg(summary);
+            CommonFunction.WriteLog(summary);
+
+            if (EventAggregator != null && realtimePowers.Count > 0)
+                EventAggregator.GetEvent<EventRealtimePowerUpdate>().Publish(realtimePowers);
         }
 
         private bool TryExecuteSwitchOnNamedDevice(string switchShowName, string flag, ref string errMsg)
@@ -1834,19 +2109,7 @@ namespace UIOperateInterleaverFinalTest
 
         private int GetSwitchChannelForPort(int productIndex, string portKey)
         {
-            foreach (PortAssist assist in portAssistant)
-            {
-                if (assist.ProductIndex == productIndex &&
-                    string.Equals(assist.Port, portKey, StringComparison.OrdinalIgnoreCase))
-                {
-                    if (assist.SwitchChannel > 0)
-                        return assist.SwitchChannel;
-                    int channel = ResolveSwitchChannel(assist.Name, assist.Port);
-                    return ApplySinglePortSlotChannelMapping(productIndex, channel);
-                }
-            }
-            int fallback = ResolveSwitchChannel(null, portKey);
-            return ApplySinglePortSlotChannelMapping(productIndex, fallback);
+            return GetOutputChannelForProductPort(productIndex, portKey);
         }
 
         private bool TryGetPmIndexForPort(int portIndex, out int pmIndex, ref string errMsg)
@@ -1873,7 +2136,7 @@ namespace UIOperateInterleaverFinalTest
 
             if (IsDualSwitchConfigured())
             {
-                int inChannel = GetInputChannelForProduct(productIndex);
+                int inChannel = GetInputChannelForProductPort(productIndex, portKey);
                 string pmErr = "";
                 int pmIndex = GetPmIndexForProductPort(productIndex, portKey, ref pmErr);
                 if (pmIndex < 1)

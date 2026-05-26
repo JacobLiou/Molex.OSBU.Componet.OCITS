@@ -123,7 +123,7 @@ namespace ConfigModel
             cfg.ControlKey[0] = "COM";
             cfg.ControlKey[1] = "波特率";
             cfg.Control[1] = "115200";
-            cfg.CheckCmd = "MSW 1,1,2;2,1,1;";
+            cfg.CheckCmd = "MSW 1,1,2;9,1,1;";
             return cfg;
         }
 
@@ -135,7 +135,7 @@ namespace ConfigModel
             cfg.ControlKey[0] = "COM";
             cfg.ControlKey[1] = "波特率";
             cfg.Control[1] = "115200";
-            cfg.CheckCmd = "MSW 9,1,1;";
+            cfg.CheckCmd = "MSW 1,1,2;9,1,1;";
             return cfg;
         }
 

@@ -48,14 +48,14 @@ namespace OFDRCentralControlServer.Devices
             {6, "MSW 1,1,2;9,1,6;"},
             {7, "MSW 1,1,2;9,1,7;"},
             {8, "MSW 1,1,2;9,1,8;"},
-            {9, "MSW 1,1,2;10,1,1;"},
-            {10, "MSW 1,1,2;10,1,2;"},
-            {11, "MSW 1,1,2;10,1,3;"},
-            {12, "MSW 1,1,2;10,1,4;"},
-            {13, "MSW 1,1,2;10,1,5;"},
-            {14, "MSW 1,1,2;10,1,6;"},
-            {15, "MSW 1,1,2;10,1,7;"},
-            {16, "MSW 1,1,2;10,1,8;"},
+            {9, "MSW 1,1,1;10,1,1;"},
+            {10, "MSW 1,1,1;10,1,2;"},
+            {11, "MSW 1,1,1;10,1,3;"},
+            {12, "MSW 1,1,1;10,1,4;"},
+            {13, "MSW 1,1,1;10,1,5;"},
+            {14, "MSW 1,1,1;10,1,6;"},
+            {15, "MSW 1,1,1;10,1,7;"},
+            {16, "MSW 1,1,1;10,1,8;"},
         };
 
         private readonly ILogger Log = Serilog.Log.ForContext<OpticalSwitchController>();
@@ -111,7 +111,7 @@ namespace OFDRCentralControlServer.Devices
         /// </summary>
         public async Task RouteL1_1To(int clientId, CancellationToken ct)
         {
-            //MSW 1,1,1关闭 MSW 1,1,2打开
+            // SW1：1,1,2=绿灯→上路(SW9/IN1~8)；1,1,1=红灯→下路(SW10/IN9~16)
             //MSW 2,1,1关闭 MSW 2,1,2打开
             //9,1,1 --- 9,1,8
             //MSW 10,1,1 --- 10,1,8
