@@ -273,6 +273,7 @@ SW2219_ITL_FTS/
 | UDL DevKey1 解析失败 | 换匹配版本 `UDLConfig.xml` 或 `set\DisableUDLEngine.txt` |
 | 光开关切换失败 | 查 `switch\{ShowName}`、COM/波特率、`Deviceconfig` 中 Type=MPLUSSwitch |
 | 找不到插件界面 | 查 `module\` 是否有对应 DLL；`Module_*.xml` 中 Module 名与 ExportMetadata 是否一致 |
+| 测试提示循环箱未配置/无 TCC、仅需 RT | 运行目录 `set\` 建空文件 `DisableTccChamberCheck.txt`、`RtOnlyTest.txt`；见 [doc/ITL_FTS_rt_only_no_tcc.md](doc/ITL_FTS_rt_only_no_tcc.md) |
 
 ---
 

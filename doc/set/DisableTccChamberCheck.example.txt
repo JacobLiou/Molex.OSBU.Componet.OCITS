@@ -1,0 +1,3 @@
+# 复制为运行目录 set\DisableTccChamberCheck.txt（空文件即可）
+# 作用：测试前跳过 UDL 循环箱温度校验（无 TCC 现场）
+# 说明见 doc\ITL_FTS_rt_only_no_tcc.md

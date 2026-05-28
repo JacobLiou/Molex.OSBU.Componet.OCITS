@@ -7,7 +7,7 @@
 - **入光（COM1）**：MPLUS `interleaverSwitch-MPLUS-IN`，TLS → DUT **IN1–16**（两片 1×8，模块 9/10）。
 - **出光（COM2）**：MPLUS `interleaverSwitch-MPLUS-OUT`，DUT **OUT** → N7745C **PM1–4**（EVEN/ODD，flag 维 32）。
 - 第 k 个录入的 SN（`ProductIndex = k`）在 **单口/单 PORT** 模式下入光通道默认 **k**。
-- **单 SN + Demux 双口**（Even/Odd）：一口入、两口出 — 入光均 `1::1:16`；出光 PORT1→`1::1:32`（模块9）、PORT2→`2::17:32`（模块11，GROUP 仍可为 `PORT2:PM2`）。
+- **Demux 双口**（Even/Odd，单 SN 或逐个「打开模板」累加至多 16 个 SN）：每 SN 一口入、两口出 — 入光 Even/Odd 均为 `k::k:16`（`ProductIndex` 为 k）；出光 PORT1 Even→`PM::17:32`（SW2 模块11）、PORT2 Odd→`PM::1:32`（SW1 模块9，GROUP 例 `PORT2:PM2`）。
 - 出光通道由端口名 **L3-4…L4-1** 或 `PORTn` 解析（1–16；出开关表支持至 32）。
 
 ## 入光 MSW（指令表，级联实测）
@@ -107,10 +107,10 @@ MSW 1,1,2;9,1,2;
 
 | 侧 | 格式 | 示例 |
 |----|------|------|
-| 入光 | `产品序号::入通道:16` | Demux 两口均 `1::1:16` → `MSW 1,1,2;9,1,1;`（一口进 DUT） |
-| 出光 | `PM序号::出通道:32` | Demux Even：`1::1:32` → `MSW 1,1,2;9,1,1;`；Odd：`2::17:32` → `MSW 2,1,2;11,1,1;` |
+| 入光 | `产品序号::入通道:16` | Demux 第 k 个 SN：Even/Odd 均为 `k::k:16`（两口共用入光槽） |
+| 出光 | `PM序号::出通道:32` | Demux Even（PORT1）：`1::17:32` → SW2 模块11；Odd（PORT2）：`2::1:32` → SW1 模块9 |
 
-> IN 指令表按「16 产品×16 通道」展开，MSW 仅随入通道 C 变化；Demux 单 SN 实际只用 `1::1:16`。OUT 表 MSW 仅随出通道 C 变化；Demux 用 ch **1** 与 **17**（模块 **9** / **11**），不是 `PORTn→n`。
+> IN 指令表按「16 产品×16 通道」展开，MSW 仅随入通道 C 变化。OUT 表 MSW 仅随出通道 C 变化；Demux 出光固定 ch **17**（Even/SW2）与 ch **1**（Odd/SW1），与 `PORTn→n` 无关。见 `doc/工位接线图.png`。
 
 扫描/归零前业务层 **先后** 切换入光、出光；任一步失败则中止。
 

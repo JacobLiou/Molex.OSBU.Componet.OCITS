@@ -1,0 +1,3 @@
+# 复制为运行目录 set\RtOnlyTest.txt（空文件即可）
+# 作用：一键/单项测试仅执行常温项（约 20~30°C），跳过 LT/HT
+# 说明见 doc\ITL_FTS_rt_only_no_tcc.md

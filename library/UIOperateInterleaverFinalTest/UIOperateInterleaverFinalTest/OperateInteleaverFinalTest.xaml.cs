@@ -790,22 +790,15 @@ namespace UIOperateInterleaverFinalTest
                 ErrorBox("无工位信息，请检查配置！");
                 return;
             }
-            if(allProductControl.Count>=2&&portAndNameDic.Count==7)
+            if (portAndNameDic.Count > 0)
             {
-                ErrorBox("该工位最多支持测试2个7端口产品！");
-                return;
-            }
-
-            if (allProductControl.Count >= 8 && portAndNameDic.Count == 2)
-            {
-                ErrorBox("该工位最多支持测试8个双端口产品！");
-                return;
-            }
-
-            if (allProductControl.Count >= OpticalSwitchConfigNames.MaxProductsSinglePort && portAndNameDic.Count == 1)
-            {
-                ErrorBox(string.Format("该工位最多支持测试{0}个单端口产品！", OpticalSwitchConfigNames.MaxProductsSinglePort));
-                return;
+                int maxProducts = OpticalSwitchConfigNames.GetMaxProductsForPortCount(portAndNameDic.Count);
+                if (maxProducts > 0 && allProductControl.Count >= maxProducts)
+                {
+                    ErrorBox(string.Format("该工位最多支持测试{0}个{1}端口产品！",
+                        maxProducts, portAndNameDic.Count));
+                    return;
+                }
             }
 
             if (portAndNameDic.Count > 0 &&
@@ -1433,6 +1426,19 @@ namespace UIOperateInterleaverFinalTest
 
                 SWMaxPortFlag = Math.Max(SWMaxPortFlag, OpticalSwitchConfigNames.MaxOutputSwitchChannels);
 
+                if (IsDemuxDualPortTemplate())
+                {
+                    int openedProductIndex = productIdx + 1;
+                    foreach (PortAssist assist in portAssistant)
+                    {
+                        if (assist.ProductIndex != openedProductIndex)
+                            continue;
+                        int demuxCh = GetDemuxOutputChannelForPortIndex(assist.PortIndex);
+                        if (demuxCh > 0)
+                            assist.SwitchChannel = demuxCh;
+                    }
+                }
+
                 ReadRefData(productIdx, portAssistant, ref errMsg);
                 SetOpenTemplateComplete(true);
                 ParamItemUpdate(productIdx, true);
@@ -1741,6 +1747,21 @@ namespace UIOperateInterleaverFinalTest
             return allProductControl.Count == 1 && portAndNameDic.Count >= 2;
         }
 
+        /// <summary>
+        /// 模板含 Demux-Even/Odd 等双口（单 SN 或逐个打开模板累加多 SN 均适用）。
+        /// </summary>
+        private bool IsDemuxDualPortTemplate()
+        {
+            if (portAndNameDic.Count < 2)
+                return false;
+            foreach (string key in portAndNameDic.Keys)
+            {
+                if (key.IndexOf("Demux", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            }
+            return false;
+        }
+
         private static int TryParsePortIndex(string portKey)
         {
             string port = (portKey ?? "").Replace(" ", "").ToUpperInvariant();
@@ -1751,7 +1772,7 @@ namespace UIOperateInterleaverFinalTest
         }
 
         /// <summary>
-        /// Demux 双口：PORT1→模块9(ch1)，PORT2→模块11(ch17)。
+        /// Demux 双口：PORT1 Even→SW2 模块11(ch17)，PORT2 Odd→SW1 模块9(ch1)（见 doc/工位接线图.png）。
         /// </summary>
         private static int GetDemuxOutputChannelForPortIndex(int portIndex)
         {
@@ -1763,12 +1784,26 @@ namespace UIOperateInterleaverFinalTest
         }
 
         /// <summary>
-        /// 入光通道：Demux 单 SN 双口固定一口入；多口产品按 PORT/L 名解析；否则回退 SN 槽位映射。
+        /// Demux 最简规则：入光 flag 产品序号位固定为 1（1::k:16）。
+        /// </summary>
+        private int GetInputFlagProductSerial(int productIndex)
+        {
+            if (IsDemuxDualPortTemplate())
+                return 1;
+            return productIndex;
+        }
+
+        /// <summary>
+        /// 入光通道：Demux 双口每 SN 占 1 入光槽（Even/Odd 共用 productIndex）；多口产品按 PORT/L 名解析；否则回退 SN 槽位映射。
         /// </summary>
         private int GetInputChannelForProductPort(int productIndex, string portKey)
         {
-            if (IsSingleProductMultiPortMode())
+            if (IsDemuxDualPortTemplate())
+            {
+                if (productIndex >= 1 && productIndex <= OpticalSwitchConfigNames.MaxInputSwitchChannels)
+                    return productIndex;
                 return GetInputChannelForProduct(productIndex);
+            }
 
             int ch = ResolvePortChannelWithoutDemuxOverride(productIndex, portKey);
             if (ch >= 1 && ch <= OpticalSwitchConfigNames.MaxInputSwitchChannels)
@@ -1799,7 +1834,7 @@ namespace UIOperateInterleaverFinalTest
         /// </summary>
         private int ResolveOutputSwitchChannelAtTemplateLoad(PortAssist assist)
         {
-            if (allProductControl.Count == 1 && portAndNameDic.Count >= 2)
+            if (IsDemuxDualPortTemplate())
             {
                 int demuxCh = GetDemuxOutputChannelForPortIndex(assist.PortIndex);
                 if (demuxCh > 0)
@@ -1814,7 +1849,7 @@ namespace UIOperateInterleaverFinalTest
         /// </summary>
         private int GetOutputChannelForProductPort(int productIndex, string portKey)
         {
-            if (IsSingleProductMultiPortMode())
+            if (IsDemuxDualPortTemplate())
             {
                 int demuxCh = GetDemuxOutputChannelForPortIndex(TryParsePortIndex(portKey));
                 if (demuxCh > 0)
@@ -1920,7 +1955,8 @@ namespace UIOperateInterleaverFinalTest
 
             if (IsDualSwitchConfigured())
             {
-                string inFlag = productIndex.ToString() + "::" + inChannel.ToString() + ":" +
+                int inProductSerial = GetInputFlagProductSerial(productIndex);
+                string inFlag = inProductSerial.ToString() + "::" + inChannel.ToString() + ":" +
                                 OpticalSwitchConfigNames.MaxInputSwitchChannels.ToString();
                 body.AppendLine("入光盒（1×16 级联：ch1~8 → MSW 1,1,2;9,1,n；ch9~16 → MSW 1,1,1;10,1,n）：");
                 body.AppendLine("  flag = " + inFlag);
@@ -2065,7 +2101,7 @@ namespace UIOperateInterleaverFinalTest
             return false;
         }
 
-        private bool SetInputSwitch(int productIndex, int inChannel, ref string errMsg)
+        private bool SetInputSwitch(int inputProductSerial, int inChannel, ref string errMsg)
         {
             errMsg = "";
             if (inChannel < 1 || inChannel > OpticalSwitchConfigNames.MaxInputSwitchChannels)
@@ -2075,7 +2111,7 @@ namespace UIOperateInterleaverFinalTest
                 return false;
             }
 
-            string flag = productIndex.ToString() + "::" + inChannel.ToString() + ":" +
+            string flag = inputProductSerial.ToString() + "::" + inChannel.ToString() + ":" +
                             OpticalSwitchConfigNames.MaxInputSwitchChannels.ToString();
             if (TryExecuteSwitchCommand(
                 OpticalSwitchConfigNames.InterleaverMplus1X16In, flag, "入光开关", ref errMsg))
@@ -2137,6 +2173,7 @@ namespace UIOperateInterleaverFinalTest
             if (IsDualSwitchConfigured())
             {
                 int inChannel = GetInputChannelForProductPort(productIndex, portKey);
+                int inProductSerial = GetInputFlagProductSerial(productIndex);
                 string pmErr = "";
                 int pmIndex = GetPmIndexForProductPort(productIndex, portKey, ref pmErr);
                 if (pmIndex < 1)
@@ -2144,7 +2181,7 @@ namespace UIOperateInterleaverFinalTest
                     errMsg = pmErr;
                     return false;
                 }
-                if (!SetInputSwitch(productIndex, inChannel, ref errMsg))
+                if (!SetInputSwitch(inProductSerial, inChannel, ref errMsg))
                     return false;
                 if (!SetOutputSwitch(pmIndex, outChannel, ref errMsg))
                     return false;
@@ -2184,7 +2221,21 @@ namespace UIOperateInterleaverFinalTest
             }
         }
 
-        
+        /// <summary>
+        /// 扫描/测试前切换光开关；失败时提示并返回 false（与系统归零同一套 Demux 入出光解析）。
+        /// </summary>
+        private bool TrySetSwitchBeforeScan(int productIndex, string portKey)
+        {
+            if (TasRuntimeConfig.IsRefAutoSwitchDisabled())
+                return true;
+
+            string switchErr = "";
+            if (SetSwitch(productIndex, portKey, ref switchErr))
+                return true;
+
+            ErrorBox(string.IsNullOrEmpty(switchErr) ? "切换光开关失败。" : switchErr);
+            return false;
+        }
 
         /// <summary>
         /// 读取归零数据
@@ -2627,7 +2678,7 @@ namespace UIOperateInterleaverFinalTest
         /// <param name="scanType">扫描类型</param>
         private void DoScanOnBK()
         {
-            if (curTestTmpt > -299)
+            if (curTestTmpt > -299 && !TasRuntimeConfig.IsTccChamberCheckDisabled())
             {
                 string chamberMsg;
                 if (!TryValidateChamberTemperature(curTestTmpt, out chamberMsg))
@@ -3256,6 +3307,16 @@ namespace UIOperateInterleaverFinalTest
             return tmpt >= 20 && tmpt <= 30;
         }
 
+        /// <summary>
+        /// RtOnlyTest 模式下仅允许常温；否则不限制。
+        /// </summary>
+        private static bool IsTestTemperatureAllowed(double tmpt)
+        {
+            if (!TasRuntimeConfig.IsRtOnlyTestMode())
+                return true;
+            return IsRoomTemperature(tmpt);
+        }
+
         private static bool IsMaxMinIlParam(string exParamName)
         {
             if (string.IsNullOrEmpty(exParamName))
@@ -3383,6 +3444,12 @@ namespace UIOperateInterleaverFinalTest
 
         private bool EnsureChamberReadyForTest(double requiredTmpt, bool restoreOnekeyUiOnFail = false)
         {
+            if (TasRuntimeConfig.IsTccChamberCheckDisabled())
+            {
+                RealtimeMsg("已跳过循环箱温度校验（set\\DisableTccChamberCheck.txt）");
+                return true;
+            }
+
             string message;
             if (TryValidateChamberTemperature(requiredTmpt, out message))
             {
@@ -3683,6 +3750,25 @@ namespace UIOperateInterleaverFinalTest
             if (curTestTmpt == -300)
             {
                 scanTmpt = portAssistant[0].TestTmpt;
+                if (TasRuntimeConfig.IsRtOnlyTestMode())
+                {
+                    scanTmpt = -300;
+                    for (int j = 0; j < portAssistant.Count; j++)
+                    {
+                        if (IsRoomTemperature(portAssistant[j].TestTmpt))
+                        {
+                            scanTmpt = portAssistant[j].TestTmpt;
+                            break;
+                        }
+                    }
+                    if (scanTmpt < -299)
+                    {
+                        WarningBox("RtOnlyTest：模板中未找到常温测试项。");
+                        UIControl.IsScanEnable = true;
+                        UIControl.IsSaveEnable = true;
+                        return;
+                    }
+                }
             }
             else
             {
@@ -3691,6 +3777,8 @@ namespace UIOperateInterleaverFinalTest
             //查找当前一键测试该测试哪项
             for (i = 0; i < portAssistant.Count; i++)
             {
+                if (!IsTestTemperatureAllowed(portAssistant[i].TestTmpt))
+                    continue;
                 if ((!portAssistant[i].IsTested) && scanTmpt==portAssistant[i].TestTmpt)
                 {
                     break;
@@ -3701,6 +3789,8 @@ namespace UIOperateInterleaverFinalTest
             {
                 for (i = 0; i < portAssistant.Count; i++)
                 {
+                    if (!IsTestTemperatureAllowed(portAssistant[i].TestTmpt))
+                        continue;
                     if (!portAssistant[i].IsTested)
                     {
                         scanTmpt = portAssistant[i].TestTmpt;
@@ -3711,11 +3801,22 @@ namespace UIOperateInterleaverFinalTest
 
             if (i == portAssistant.Count)
             {
-                //测试完成，恢复按钮状态
-                //常温测试完后，需要继续，知道最后一个温度测试完成才结束
-                //
-                //
-                MessageBox.Show("一键测试完成！");
+                bool rtOnly = TasRuntimeConfig.IsRtOnlyTestMode();
+                bool anyRtPending = false;
+                bool anyNonRtUntested = false;
+                for (int j = 0; j < portAssistant.Count; j++)
+                {
+                    if (portAssistant[j].IsTested)
+                        continue;
+                    if (IsRoomTemperature(portAssistant[j].TestTmpt))
+                        anyRtPending = true;
+                    else
+                        anyNonRtUntested = true;
+                }
+                string completeMsg = "一键测试完成！";
+                if (rtOnly && !anyRtPending && anyNonRtUntested)
+                    completeMsg = "RtOnlyTest：无常温待测项，一键测试结束。（低温/高温项已跳过）";
+                MessageBox.Show(completeMsg);
                 UIControl.IsScanEnable = true;
                 UIControl.IsSaveEnable = true;
                 return;
@@ -3732,15 +3833,23 @@ namespace UIOperateInterleaverFinalTest
             }
             //获取同时扫描的端口号。
             //进光端一样，则可以一起扫描，比如in-to,in-te,in-moni同时扫描
-            string testPortName = "";
-            foreach (PortAssist assist in portAssistant)
+            // Demux Even/Odd 出光路径不同，与归零一致：每次只测当前排队口，不按 ScanIndex 合并。
+            string testPortName = portAssistant[i].Port;
+            scanDetailInfo.Ports.Clear();
+            if (IsDemuxDualPortTemplate())
             {
-                //string[] splits = assist.Name.Split('-');
-                if (productID==assist.ProductIndex&& scanIndex==assist.ScanIndex
-                    && scanTmpt==assist.TestTmpt)
+                scanDetailInfo.Ports.Add(portAssistant[i].PortIndex);
+            }
+            else
+            {
+                foreach (PortAssist assist in portAssistant)
                 {
-                    testPortName = assist.Port;
-                    scanDetailInfo.Ports.Add(assist.PortIndex);
+                    if (productID == assist.ProductIndex && scanIndex == assist.ScanIndex
+                        && scanTmpt == assist.TestTmpt)
+                    {
+                        testPortName = assist.Port;
+                        scanDetailInfo.Ports.Add(assist.PortIndex);
+                    }
                 }
             }
             scanDetailInfo.ProductIndex = productID;
@@ -3750,8 +3859,12 @@ namespace UIOperateInterleaverFinalTest
                 WarningBox(errMsg);
                 return;
             }
-            //切换开关
-            SetSwitch(productID,testPortName);
+            if (!TrySetSwitchBeforeScan(productID, testPortName))
+            {
+                UIControl.IsScanEnable = true;
+                UIControl.IsSaveEnable = true;
+                return;
+            }
 
             scanDetailInfo.ScanType = SCANTYPE.TestWithPDLOnekey;
             UIControl.IsScanEnable = false;
@@ -3831,50 +3944,69 @@ namespace UIOperateInterleaverFinalTest
                     return;
                 MESTestInfo selectTestItem = showInfos[selectIndex];
               
-                //string[] portNames = selectTestItem.PortNameForUser.Split('-');
                 scanDetailInfo.Ports.Clear();
-                //获取同时扫描的端口号。
-                //进光端一样，则可以一起扫描，比如in-to,in-te,in-moni同时扫描
-                string testPortName = "";
-                int scanIndex = -1;
-               
+                PortAssist switchAssist = null;
                 foreach (PortAssist assist in portAssistant)
                 {
-                    if(scanIndex==-1)
-                    {
-                        if (PortNameMatchesChannel(selectTestItem.PortNameForUser, assist.Name))
-                        {
-                            scanIndex = assist.ScanIndex;
-                        }
-                    }
-                    //string[] splits = assist.Name.Split('-');
-                    if ((selectItem.ProductIndex+1) == assist.ProductIndex && scanIndex == assist.ScanIndex
+                    if ((selectItem.ProductIndex + 1) == assist.ProductIndex
+                        && PortNameMatchesChannel(selectTestItem.PortNameForUser, assist.Name)
                         && selectTestItem.Temperature == assist.TestTmpt)
                     {
-                        testPortName = assist.Port;
-                        scanDetailInfo.Ports.Add(assist.PortIndex);
+                        switchAssist = assist;
+                        break;
+                    }
+                }
+                if (switchAssist == null)
+                {
+                    WarningBox("未找到与列表选中项对应的光路端口，请确认模板已打开。");
+                    return;
+                }
+
+                string testPortName = switchAssist.Port;
+                if (IsDemuxDualPortTemplate())
+                {
+                    scanDetailInfo.Ports.Add(switchAssist.PortIndex);
+                }
+                else
+                {
+                    int scanIndex = switchAssist.ScanIndex;
+                    foreach (PortAssist assist in portAssistant)
+                    {
+                        if ((selectItem.ProductIndex + 1) == assist.ProductIndex && scanIndex == assist.ScanIndex
+                            && selectTestItem.Temperature == assist.TestTmpt)
+                        {
+                            scanDetailInfo.Ports.Add(assist.PortIndex);
+                        }
                     }
                 }
 
-              
                 string errMsg = "";
                 if (!IsScanRef(scanDetailInfo.Ports, ref errMsg))
                 {
                     WarningBox(errMsg);
                     return;
                 }
-               
-                //切换开关
-                //SetSwitch(true);
+
                 double testTmpt = selectTestItem.Temperature;
                 RealtimeMsg(string.Format("当前测试温度:{0}", testTmpt));
+                if (!IsTestTemperatureAllowed(testTmpt))
+                {
+                    WarningBox(string.Format(
+                        "RtOnlyTest 模式仅支持常温测试（约 20~30°C）。\r\n当前项温度:{0:F1}°C\r\n请删除 set\\RtOnlyTest.txt 或改选常温行。",
+                        testTmpt));
+                    return;
+                }
                 if (!EnsureChamberReadyForTest(testTmpt))
                     return;
 
                 scanDetailInfo.ScanType = SCANTYPE.TestWithPDL;
                 scanDetailInfo.ProductIndex = selectItem.ProductIndex + 1;
                 UIControl.IsScanEnable = false;
-                SetSwitch(scanDetailInfo.ProductIndex, testPortName);
+                if (!TrySetSwitchBeforeScan(scanDetailInfo.ProductIndex, testPortName))
+                {
+                    UIControl.IsScanEnable = true;
+                    return;
+                }
                 curTestTmpt = testTmpt;
                 DoScanOnBK();
             }
