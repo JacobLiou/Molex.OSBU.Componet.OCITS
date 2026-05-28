@@ -1,0 +1,16 @@
+# UDL FSTP 扫描客户端等待策略（复制为运行目录 set\FstpScanTimeout.txt 后生效）
+# 按波长范围与步进估算超时，并结合 GetSweepStatus 返回的 plEstWaitingTime 动态延长。
+
+MinTimeoutSec=120
+MaxTimeoutSec=3600
+TimeoutMargin=2.0
+SecondsPerPointPdl=0.05
+SecondsPerPointIl=0.02
+EstWaitMultiplier=1.5
+EstWaitMarginSec=30
+PollIntervalFastMs=300
+PollIntervalSlowMs=1000
+PollSlowThresholdSec=30
+LogPollIntervalSec=15
+TimeoutRetryCount=1
+PreExecuteDrainSec=60

@@ -1433,7 +1433,7 @@ namespace UIOperateInterleaverFinalTest
                     {
                         if (assist.ProductIndex != openedProductIndex)
                             continue;
-                        int demuxCh = GetDemuxOutputChannelForPortIndex(assist.PortIndex);
+                        int demuxCh = GetDemuxOutputChannelForPortIndex(assist.ProductIndex, assist.PortIndex);
                         if (demuxCh > 0)
                             assist.SwitchChannel = demuxCh;
                     }
@@ -1772,14 +1772,26 @@ namespace UIOperateInterleaverFinalTest
         }
 
         /// <summary>
-        /// Demux 双口：PORT1 Even→SW2 模块11(ch17)，PORT2 Odd→SW1 模块9(ch1)（见 doc/工位接线图.png）。
+        /// Demux 双口递推规则（N 从 1 开始）：
+        /// PORT1（Even）= N+16；PORT2（Odd）= N。
+        /// 示例：产品1 -> 17/1，产品2 -> 18/2。
         /// </summary>
-        private static int GetDemuxOutputChannelForPortIndex(int portIndex)
+        private static int GetDemuxOutputChannelForPortIndex(int productIndex, int portIndex)
         {
+            if (productIndex < 1)
+                return -1;
             if (portIndex == 1)
-                return OpticalSwitchConfigNames.DemuxEvenOutputChannel;
+            {
+                int evenChannel = productIndex + 16;
+                return (evenChannel >= 1 && evenChannel <= OpticalSwitchConfigNames.MaxOutputSwitchChannels)
+                    ? evenChannel : -1;
+            }
             if (portIndex == 2)
-                return OpticalSwitchConfigNames.DemuxOddOutputChannel;
+            {
+                int oddChannel = productIndex;
+                return (oddChannel >= 1 && oddChannel <= OpticalSwitchConfigNames.MaxOutputSwitchChannels)
+                    ? oddChannel : -1;
+            }
             return -1;
         }
 
@@ -1836,7 +1848,7 @@ namespace UIOperateInterleaverFinalTest
         {
             if (IsDemuxDualPortTemplate())
             {
-                int demuxCh = GetDemuxOutputChannelForPortIndex(assist.PortIndex);
+                int demuxCh = GetDemuxOutputChannelForPortIndex(assist.ProductIndex, assist.PortIndex);
                 if (demuxCh > 0)
                     return demuxCh;
             }
@@ -1851,7 +1863,7 @@ namespace UIOperateInterleaverFinalTest
         {
             if (IsDemuxDualPortTemplate())
             {
-                int demuxCh = GetDemuxOutputChannelForPortIndex(TryParsePortIndex(portKey));
+                int demuxCh = GetDemuxOutputChannelForPortIndex(productIndex, TryParsePortIndex(portKey));
                 if (demuxCh > 0)
                     return demuxCh;
             }
@@ -1942,6 +1954,7 @@ namespace UIOperateInterleaverFinalTest
             int outChannel = GetOutputChannelForProductPort(productIndex, portKey);
             string pmErr = "";
             int pmIndex = GetPmIndexForProductPort(productIndex, portKey, ref pmErr);
+            int outputFlagProductSerial = GetOutputFlagProductSerial(productIndex, portKey, pmIndex);
             int inChannel = GetInputChannelForProductPort(productIndex, portKey);
 
             string switchDir = Path.Combine(Environment.CurrentDirectory, "switch");
@@ -1962,9 +1975,9 @@ namespace UIOperateInterleaverFinalTest
                 body.AppendLine("  flag = " + inFlag);
                 body.AppendLine("  MSW = " + FormatInputMplusMswForChannel(inChannel));
                 body.AppendLine("  文件 = " + Path.Combine(switchDir, OpticalSwitchConfigNames.InterleaverMplus1X16In));
-                if (pmIndex >= 1)
+                if (outputFlagProductSerial >= 1)
                 {
-                    string outFlag = pmIndex.ToString() + "::" + outChannel.ToString() + ":" +
+                    string outFlag = outputFlagProductSerial.ToString() + "::" + outChannel.ToString() + ":" +
                                      OpticalSwitchConfigNames.MaxOutputSwitchChannels.ToString();
                     body.AppendLine("出光盒（1×32 级联：ch1~8→1,1,2;9 / 9~16→1,1,1;10 / 17~24→2,1,2;11 / 25~32→2,1,1;12）：");
                     body.AppendLine("  flag = " + outFlag);
@@ -2140,7 +2153,31 @@ namespace UIOperateInterleaverFinalTest
             if (TryExecuteSwitchCommand(OpticalSwitchConfigNames.InterleaverMplus1X32Out, flag, "出光开关", ref errMsg))
                 return true;
 
+            // 兼容仅保留 [1::x:32] 的最小 OUT 指令表：优先按 PMIndex；失败后自动回退到 PM1。
+            if (pmIndex != 1)
+            {
+                string fallbackFlag = "1::" + outChannel.ToString() + ":" +
+                                      OpticalSwitchConfigNames.MaxOutputSwitchChannels.ToString();
+                string fallbackErr = "";
+                if (TryExecuteSwitchCommand(OpticalSwitchConfigNames.InterleaverMplus1X32Out, fallbackFlag, "出光开关", ref fallbackErr))
+                {
+                    RealtimeMsg(string.Format("出光开关已回退到 PM1 路由（原flag={0}，回退flag={1}）。", flag, fallbackFlag));
+                    return true;
+                }
+            }
+
             return false;
+        }
+
+        /// <summary>
+        /// 出光 flag 的第一段序号。
+        /// Demux 双口按现场约定固定为 1（1::x:32）；其他模板沿用 PMIndex。
+        /// </summary>
+        private int GetOutputFlagProductSerial(int productIndex, string portKey, int pmIndex)
+        {
+            if (IsDemuxDualPortTemplate())
+                return 1;
+            return pmIndex;
         }
 
         private int GetSwitchChannelForPort(int productIndex, string portKey)
@@ -2176,14 +2213,15 @@ namespace UIOperateInterleaverFinalTest
                 int inProductSerial = GetInputFlagProductSerial(productIndex);
                 string pmErr = "";
                 int pmIndex = GetPmIndexForProductPort(productIndex, portKey, ref pmErr);
-                if (pmIndex < 1)
+                int outputFlagProductSerial = GetOutputFlagProductSerial(productIndex, portKey, pmIndex);
+                if (outputFlagProductSerial < 1)
                 {
                     errMsg = pmErr;
                     return false;
                 }
                 if (!SetInputSwitch(inProductSerial, inChannel, ref errMsg))
                     return false;
-                if (!SetOutputSwitch(pmIndex, outChannel, ref errMsg))
+                if (!SetOutputSwitch(outputFlagProductSerial, outChannel, ref errMsg))
                     return false;
                 return true;
             }

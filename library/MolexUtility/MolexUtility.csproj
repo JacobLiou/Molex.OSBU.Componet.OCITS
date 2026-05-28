@@ -131,6 +131,7 @@
     <Compile Include="SerialControl\SerialNI.cs" />
     <Compile Include="SharedTool.cs" />
     <Compile Include="UdlRuntimeConfig.cs" />
+    <Compile Include="FstpScanWaitSettings.cs" />
     <Compile Include="TasRuntimeConfig.cs" />
     <Compile Include="UIList\ColumnMap.cs" />
     <Compile Include="UIList\IndexMap.cs" />
