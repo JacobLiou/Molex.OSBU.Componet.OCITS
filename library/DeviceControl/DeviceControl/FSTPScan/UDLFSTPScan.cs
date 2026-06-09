@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using MolexUtility;
 using MolexUtility.Device;
 using System.Threading;
 using System.IO;
@@ -20,7 +21,10 @@ namespace DeviceControl
 
         private static object scanStatusLock = new object();
 
+        private static readonly object SweepWaitLock = new object();
+
         private int scanResult = -1;
+        private bool hasExecutedSweepInProcess = false;
 
         private bool requestDoPDL = false;
         private bool requestdoRef = false;
@@ -87,60 +91,16 @@ namespace DeviceControl
                     }
                 }
             }
-            int waitTimes = 180;
-            bool isScanSuccess = false;
-            while (waitTimes > 0)
+            int waitCode;
+            lock (SweepWaitLock)
             {
-                int plSweepStatus;
-                int plEstWaitingTime;
-                DeviceHandle.fstpCtrl.GetSweepStatus(deviceGUID, out plSweepStatus, out plEstWaitingTime);
-                DeviceHandle.GetUDLMessage(ref requestErrMsg);
-                if (requestErrMsg.Length > 0)
-                {
-                    lock (scanStatusLock)
-                    {
-                        scanResult = 1;
-                        return;
-                    }
-                }
-                if (plSweepStatus == 0)
-                {
-                    waitTimes--;
-                    Thread.Sleep(500);
-                    continue;
-                }
-                else if (plSweepStatus == -1)
-                {
-                    requestErrMsg = "scan error";
-                        lock (scanStatusLock)
-                        {
-                            scanResult = 1;
-                        return;
-                    }
-                }
-                else if (plSweepStatus == 1)
-                {
-                    isScanSuccess = true;
-                    break;
-                }
-
+                waitCode = WaitForSweepCompletion(requestDoPDL, requestWLStart, requestWLStop, requestStep, ref requestErrMsg);
             }
-            if (isScanSuccess)
+            lock (scanStatusLock)
             {
-                lock (scanStatusLock)
-                {
-                    scanResult = 0;
+                scanResult = waitCode;
+                if (waitCode != 0)
                     return;
-                }
-            }
-            else
-            {
-                requestErrMsg = "scan time out.";
-                lock (scanStatusLock)
-                {
-                    scanResult = 1;
-                    return;
-                }
             }
             MolexUtility.CommonFunction.WriteLog(string.Format("DEVICE CONTROL Scan success"));
             int sampleCount = Convert.ToInt32((requestWLStop - requestWLStart) / requestStep) + 10;
@@ -217,6 +177,145 @@ namespace DeviceControl
             return 0;
         }
 
+        private static bool TryGetUdlError(ref string errMsg)
+        {
+            if (!DeviceHandle.GetUDLMessage(ref errMsg))
+                return false;
+            errMsg = "";
+            return true;
+        }
+
+        /// <summary>配置 FSTP 波长与功率计参数。</summary>
+        /// <returns>0 成功，2 失败</returns>
+        private int SetupScanParameters(double dWLStart, double dWLStop, double dStep, ref string errMsg)
+        {
+            DeviceHandle.fstpCtrl.SetFSTPParameters(deviceGUID, dWLStart, dWLStop, dStep);
+            if (!TryGetUdlError(ref errMsg))
+                return 2;
+
+            double[] wl = new double[1];
+            double[] rang = new double[pwmIdxs.Length];
+            for (int i = 0; i < pwmIdxs.Length; i++)
+                rang[i] = 0;
+
+            DeviceHandle.fstpCtrl.SetAllPMParameters(deviceGUID, 0, ref wl[0], ref rang[0], 0, pwmIdxs.Length, ref pwmIdxs[0]);
+            if (!TryGetUdlError(ref errMsg))
+                return 2;
+            return 0;
+        }
+
+        /// <summary>若上次扫描仍在进行，等待其结束。</summary>
+        /// <returns>0 可继续，2 失败</returns>
+        private int DrainInProgressSweep(ref string errMsg)
+        {
+            FstpScanWaitSettings settings = FstpScanWaitSettings.Current;
+            DateTime deadline = DateTime.UtcNow.AddSeconds(settings.PreExecuteDrainSec);
+            while (DateTime.UtcNow < deadline)
+            {
+                int plSweepStatus;
+                int plEstWaitingTime;
+                DeviceHandle.fstpCtrl.GetSweepStatus(deviceGUID, out plSweepStatus, out plEstWaitingTime);
+                if (!TryGetUdlError(ref errMsg))
+                    return 2;
+                if (plSweepStatus == 0)
+                {
+                    Thread.Sleep(settings.GetPollIntervalMs(plEstWaitingTime));
+                    continue;
+                }
+                if (plSweepStatus == -1)
+                {
+                    errMsg = "scan error";
+                    return 2;
+                }
+                return 0;
+            }
+            CommonFunction.WriteLog(string.Format(
+                "FSTP pre-check timeout, continue execute directly: guid={0}",
+                deviceGUID));
+            errMsg = "";
+            return 0;
+        }
+
+        /// <summary>下发单次 IL/PDL 扫描。</summary>
+        /// <returns>0 成功，2 失败</returns>
+        private int ExecuteSweep(bool doPDL, ref string errMsg)
+        {
+            if (doPDL)
+                DeviceHandle.fstpCtrl.ExecutePDLSingleSweep(deviceGUID);
+            else
+                DeviceHandle.fstpCtrl.ExecuteILSingleSweep(deviceGUID);
+            if (!TryGetUdlError(ref errMsg))
+                return 2;
+            hasExecutedSweepInProcess = true;
+            return 0;
+        }
+
+        /// <summary>轮询扫描完成；结合点数估算与服务端 plEstWaitingTime 动态延长 deadline。</summary>
+        /// <returns>0 成功，1 超时，2 失败</returns>
+        private int WaitForSweepCompletion(bool doPDL, double dWLStart, double dWLStop, double dStep, ref string errMsg)
+        {
+            FstpScanWaitSettings settings = FstpScanWaitSettings.Current;
+            DateTime deadlineUtc = settings.ComputeDeadlineUtc(doPDL, dWLStart, dWLStop, dStep);
+            DateTime startUtc = DateTime.UtcNow;
+            DateTime lastLogUtc = startUtc;
+            int pollCount = 0;
+
+            CommonFunction.WriteLog(string.Format(
+                "FSTP wait begin: guid={0} PDL={1} WL={2:F3}-{3:F3} step={4:F4} timeout~{5:F0}s",
+                deviceGUID, doPDL, dWLStart, dWLStop, dStep, (deadlineUtc - startUtc).TotalSeconds));
+
+            while (DateTime.UtcNow < deadlineUtc)
+            {
+                int plSweepStatus;
+                int plEstWaitingTime;
+                DeviceHandle.fstpCtrl.GetSweepStatus(deviceGUID, out plSweepStatus, out plEstWaitingTime);
+                if (!TryGetUdlError(ref errMsg))
+                    return 2;
+
+                settings.ExtendDeadlineFromEstimate(ref deadlineUtc, plEstWaitingTime);
+
+                if (plSweepStatus == 1)
+                {
+                    CommonFunction.WriteLog(string.Format(
+                        "FSTP wait done: guid={0} polls={1} elapsed={2:F1}s",
+                        deviceGUID, pollCount, (DateTime.UtcNow - startUtc).TotalSeconds));
+                    return 0;
+                }
+                if (plSweepStatus == -1)
+                {
+                    errMsg = "scan error";
+                    return 2;
+                }
+                if (plSweepStatus != 0)
+                {
+                    CommonFunction.WriteLog(string.Format(
+                        "FSTP unexpected sweep status={0} guid={1}", plSweepStatus, deviceGUID));
+                    errMsg = string.Format("unexpected sweep status: {0}", plSweepStatus);
+                    return 2;
+                }
+
+                pollCount++;
+                Thread.Sleep(settings.GetPollIntervalMs(plEstWaitingTime));
+
+                if (settings.LogPollIntervalSec > 0
+                    && (DateTime.UtcNow - lastLogUtc).TotalSeconds >= settings.LogPollIntervalSec)
+                {
+                    lastLogUtc = DateTime.UtcNow;
+                    CommonFunction.WriteLog(string.Format(
+                        "FSTP waiting: guid={0} est={1}s left={2:F0}s polls={3}",
+                        deviceGUID, plEstWaitingTime,
+                        Math.Max(0, (deadlineUtc - DateTime.UtcNow).TotalSeconds), pollCount));
+                }
+            }
+
+            errMsg = "scan time out.";
+            CommonFunction.WriteLog(string.Format(
+                "FSTP wait timeout: guid={0} polls={1} elapsed={2:F1}s WL={3:F3}-{4:F3} step={5:F4}",
+                deviceGUID, pollCount, (DateTime.UtcNow - startUtc).TotalSeconds,
+                dWLStart, dWLStop, dStep));
+            return 1;
+        }
+
         /// <summary>
         /// 获取同时扫描功率计个数
         /// </summary>
@@ -236,77 +335,51 @@ namespace DeviceControl
         /// <returns>0-成功，1-超时，此时需要重连服务器，2-失败</returns>
         public int Scan(bool doPDL, bool doRef, double dWLStart, double dWLStop, double dStep, ref string errMsg)
         {
-            
             if (DeviceHandle.fstpCtrl == null)
             {
                 errMsg = "FSTP object is null.";
-                return 1;
+                return 2;
             }
-            DeviceHandle.fstpCtrl.SetFSTPParameters(deviceGUID, dWLStart, dWLStop, dStep);
-            DeviceHandle.GetUDLMessage(ref errMsg);
-            if (errMsg.Length > 0)
-                return 1;
+            if (pwmIdxs == null || pwmIdxs.Length == 0)
+            {
+                errMsg = "FSTP PM indexes not initialized.";
+                return 2;
+            }
 
-            double[] wl = new double[1];
-            double[] rang = new double[pwmIdxs.Length]; //0--一档  1--扫两档
-            for(int i=0;i< pwmIdxs.Length;i++)
+            lock (SweepWaitLock)
             {
-                rang[i] = 0;
-            }
-            DeviceHandle.fstpCtrl.SetAllPMParameters(deviceGUID, 0, ref wl[0], ref rang[0], 0, pwmIdxs.Length, ref pwmIdxs[0]);
-            DeviceHandle.GetUDLMessage(ref errMsg);
-            if (errMsg.Length > 0)
-                return 1;
-            if(doPDL)
-            {
-                DeviceHandle.fstpCtrl.ExecutePDLSingleSweep(deviceGUID);
-                DeviceHandle.GetUDLMessage(ref errMsg);
-                if (errMsg.Length > 0)
-                    return 1;
-            }
-            else
-            {
-                DeviceHandle.fstpCtrl.ExecuteILSingleSweep(deviceGUID);
-                DeviceHandle.GetUDLMessage(ref errMsg);
-                if (errMsg.Length > 0)
-                    return 1;
-            }
-            int waitTimes = 180;
-            bool isScanSuccess = false;
-            while(waitTimes>0)
-            {
-                int plSweepStatus;
-                int plEstWaitingTime;
-                DeviceHandle.fstpCtrl.GetSweepStatus(deviceGUID, out plSweepStatus, out plEstWaitingTime);
-                DeviceHandle.GetUDLMessage(ref errMsg);
-                if (errMsg.Length > 0)
-                    return 1;
-                if(plSweepStatus==0)
+                int setupRes = SetupScanParameters(dWLStart, dWLStop, dStep, ref errMsg);
+                if (setupRes != 0)
+                    return setupRes;
+
+                // 首次启动时服务端状态可能尚未稳定，避免因 pre-check 误判阻断首扫。
+                // 本进程至少执行过一次后，再启用上次扫描排空保护。
+                if (hasExecutedSweepInProcess)
                 {
-                    waitTimes--;
-                    Thread.Sleep(500);
-                    continue;
+                    int drainRes = DrainInProgressSweep(ref errMsg);
+                    if (drainRes != 0)
+                        return drainRes;
                 }
-                else if(plSweepStatus == -1)
+
+                int execRes = ExecuteSweep(doPDL, ref errMsg);
+                if (execRes != 0)
+                    return execRes;
+
+                FstpScanWaitSettings settings = FstpScanWaitSettings.Current;
+                int waitRes = WaitForSweepCompletion(doPDL, dWLStart, dWLStop, dStep, ref errMsg);
+                if (waitRes == 0)
+                    return 0;
+
+                for (int retry = 0; retry < settings.TimeoutRetryCount && waitRes == 1; retry++)
                 {
-                    errMsg = "scan error";
-                    return 1;
+                    CommonFunction.WriteLog(string.Format(
+                        "FSTP timeout retry {0}/{1} guid={2}", retry + 1, settings.TimeoutRetryCount, deviceGUID));
+                    execRes = ExecuteSweep(doPDL, ref errMsg);
+                    if (execRes != 0)
+                        return execRes;
+                    waitRes = WaitForSweepCompletion(doPDL, dWLStart, dWLStop, dStep, ref errMsg);
                 }
-                else if(plSweepStatus==1)
-                {
-                    isScanSuccess = true;
-                    break;
-                }
-               
-            }
-            if(isScanSuccess)
-            {
-                return 0;
-            }
-            else
-            {
-                errMsg = "scan time out.";
-                return 1;
+                return waitRes;
             }
         }
 
@@ -345,8 +418,9 @@ namespace DeviceControl
             errMsg = requestErrMsg;
             if (scanResult == 1)
                 return scanResult;*/
-            if (Scan(doPDL, doRef, dWLStart, dWLStop, dStep, ref errMsg) != 0)
-                return 1;
+            int scanCode = Scan(doPDL, doRef, dWLStart, dWLStop, dStep, ref errMsg);
+            if (scanCode != 0)
+                return scanCode;
             MolexUtility.CommonFunction.WriteLog(string.Format("DEVICE CONTROL Scan success"));
             int sampleCount = Convert.ToInt32((dWLStop - dWLStart) / dStep) + 10;
             for (int i = 0; i < pwmIdxs.Length; i++)
@@ -366,7 +440,7 @@ namespace DeviceControl
                 {
                     MolexUtility.CommonFunction.WriteLog("Read data begin");
                     if (GetMeasureResultWithTETM(i, out dWL[0], out aveIL[0], out pdl[0], out te[0], out tm[0], out tapIL[0], out realCount, ref errMsg) != 0)
-                        return 1;
+                        return 2;
                     MolexUtility.CommonFunction.WriteLog("Read data success");
                     FileStream stream = File.Open(path, FileMode.Create);
                     StreamWriter writer = new StreamWriter(stream);
@@ -383,7 +457,7 @@ namespace DeviceControl
                 else
                 {
                     if (GetMeasureResult(i, out dWL[0], out aveIL[0], out pdl[0], out tapIL[0], out realCount, ref errMsg) != 0)
-                        return 1;
+                        return 2;
                     FileStream stream = File.Open(path, FileMode.Create);
                     StreamWriter writer = new StreamWriter(stream);
                     string title = string.Format("WL,Power");

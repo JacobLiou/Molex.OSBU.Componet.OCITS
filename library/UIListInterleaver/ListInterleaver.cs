@@ -14,6 +14,20 @@ namespace UIListCommon
     [ExportMetadata("name", "UIListInterleaver")]
     public class ListInterleaver:ListCommon
     {
+        /// <summary>参数区最前：TDL@ITU，其后紧跟五列（顺序与模板参数名一致）</summary>
+        private static readonly string[] ParamColumnPriority =
+        {
+            "MaxIL",
+            "MinPeakIL",
+            "PDL",
+            "MinAdj_Iso",
+            "MaxShift"
+        };
+
+        private const string ParamColumnInsertAfter = "TDL";
+
+        private const int LeadingFixedColumnCount = 4;
+        private const int TrailingFixedColumnCount = 2;
         /// <summary>
         /// 是否波长、端口、温度、settingvalue一致
         /// </summary>
@@ -168,6 +182,10 @@ namespace UIListCommon
                 MapDetail.RemoveAt(i);
                 AllShowContent.RemoveAt(productIndex);
                 totalCount = ShowSNs.Count;
+            }
+            if (MapDetail.Count > 0)
+            {
+                showControl.ReorderParamColumns(ParamColumnPriority, LeadingFixedColumnCount, TrailingFixedColumnCount, ParamColumnInsertAfter);
             }
             testDataSelectChanged(this, null);
         }

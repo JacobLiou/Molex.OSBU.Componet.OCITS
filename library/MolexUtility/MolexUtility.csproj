@@ -17,7 +17,7 @@
     <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
     <Optimize>false</Optimize>
-    <OutputPath>..\..\..\bin\common\</OutputPath>
+    <OutputPath>..\..\bin\common\</OutputPath>
     <DefineConstants>DEBUG;TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
@@ -27,7 +27,7 @@
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
     <DebugType>pdbonly</DebugType>
     <Optimize>true</Optimize>
-    <OutputPath>..\..\..\bin\common\</OutputPath>
+    <OutputPath>..\..\bin\common\</OutputPath>
     <DefineConstants>TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
@@ -82,7 +82,7 @@
     </Reference>
     <Reference Include="USL.TAS, Version=1.0.0.5, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\..\..\..\CSharp\OCITS\library\MolexUtility\Debug\USL.TAS.dll</HintPath>
+      <HintPath>..\..\bin\common\USL.TAS.dll</HintPath>
     </Reference>
     <Reference Include="USL.TDB, Version=1.0.0.2, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
@@ -97,6 +97,7 @@
     <Compile Include="Command\CustomCommand.cs" />
     <Compile Include="CommonFunction.cs" />
     <Compile Include="Device\ConfigXmlParser.cs" />
+    <Compile Include="Device\OpticalSwitchConfigNames.cs" />
     <Compile Include="Device\Devices.cs" />
     <Compile Include="Device\IAutomation.cs" />
     <Compile Include="Device\ICDScan.cs" />
@@ -130,6 +131,8 @@
     <Compile Include="SerialControl\SerialNI.cs" />
     <Compile Include="SharedTool.cs" />
     <Compile Include="UdlRuntimeConfig.cs" />
+    <Compile Include="FstpScanWaitSettings.cs" />
+    <Compile Include="TasRuntimeConfig.cs" />
     <Compile Include="UIList\ColumnMap.cs" />
     <Compile Include="UIList\IndexMap.cs" />
     <Compile Include="UIList\ItemContent.cs" />

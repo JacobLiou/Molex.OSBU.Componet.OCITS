@@ -19,6 +19,8 @@ using System.ComponentModel.Composition;
 using System.ComponentModel.Composition.Hosting;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Threading;
 
 using MolexUtility;
 using MolexUtility.Command;
@@ -29,6 +31,7 @@ using ProtocolAggregator;
 using MolexUtility.UIList;
 using System.Runtime.InteropServices;
 using System.Diagnostics;
+using Path = System.IO.Path;
 //172.16.143.20
 
 namespace UIOperateInterleaverFinalTest
@@ -86,6 +89,12 @@ namespace UIOperateInterleaverFinalTest
 
         private const int TCC_GUID = 1;
 
+        /// <summary>循环箱实测温度与模板要求温度的允许偏差（°C）</summary>
+        private const double TccTempToleranceCelsius = 2.0;
+
+        /// <summary>TAS 打开模板 STA 线程最长等待（毫秒）</summary>
+        private const int OpenTemplateStaTimeoutMs = 180000;
+
         /// <summary>
         /// 是否正在烤温
         /// </summary>
@@ -107,6 +116,11 @@ namespace UIOperateInterleaverFinalTest
         /// 模板是否正确打开，并完成
         /// </summary>
         private bool isOpenTemplateComplete = false;
+
+        /// <summary>
+        /// 正在打开模板（防重复点击/批量链式打开重叠）
+        /// </summary>
+        private bool templateOpenInProgress = false;
 
         /// <summary>
         /// 归零时间确认后台线程
@@ -266,6 +280,17 @@ namespace UIOperateInterleaverFinalTest
         private Dictionary<string, int> portAndPMDic = new Dictionary<string, int>();
 
         /// <summary>
+        /// 1×16 MPLUS 光开关：端口显示名 → 输出通道（与光路图一致）
+        /// </summary>
+        private static readonly Dictionary<string, int> SwitchPortChannelMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "L3-4", 1 }, { "L3-3", 2 }, { "L3-2", 3 }, { "L3-1", 4 },
+            { "L2-4", 5 }, { "L2-3", 6 }, { "L2-2", 7 }, { "L2-1", 8 },
+            { "L1-4", 9 }, { "L1-3", 10 }, { "L1-2", 11 }, { "L1-1", 12 },
+            { "L4-4", 13 }, { "L4-3", 14 }, { "L4-2", 15 }, { "L4-1", 16 },
+        };
+
+        /// <summary>
         /// 扫描功率计个数
         /// </summary>
         private int scanPowermeterCount = 2;
@@ -308,6 +333,16 @@ namespace UIOperateInterleaverFinalTest
         /// 一起扫描的端口号
         /// </summary>
         private List<List<int>> _scanList = new List<List<int>>();
+
+        /// <summary>
+        /// 批量打开模板时待处理的 SN 队列
+        /// </summary>
+        private Queue<string> batchSnQueue;
+
+        /// <summary>
+        /// 1×16 批次是否已因常温 MAXIL/MINIL 超限终止
+        /// </summary>
+        private bool batchTestAborted = false;
 
         public delegate void GetUDLMessageDelegate(ref string msg, ref bool isSuccess);
 
@@ -651,51 +686,165 @@ namespace UIOperateInterleaverFinalTest
             MessageBox.Show(error, "出错", MessageBoxButton.OK, MessageBoxImage.Error);
         }
 
-        private void btnOpenTemplate_Click(object sender, RoutedEventArgs e)
+        private void btnBatchOpenTemplate_Click(object sender, RoutedEventArgs e)
         {
-            string errMsg = "";
-            string strGoldsampleSN = mainInfo.Goldsample;
-            errMsg = string.Format("goldsampleSN:{0},userID:{1}", strGoldsampleSN, mainInfo.UserID);
-            RealtimeMsg(errMsg);
-            errMsg = "";
-            
-            if (!FusionControl.GoldsampleCheck(strGoldsampleSN, mainInfo.UserID, "", ref errMsg))
+            var dialog = new Window
             {
-                string errPrmpt = string.Format("Goldsample验证失败{0}:{1}", strGoldsampleSN, errMsg);
-                MessageBox.Show(errPrmpt, "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+                Title = "批量打开 SN（每行一个，最多16个）",
+                Width = 380,
+                Height = 320,
+                WindowStartupLocation = WindowStartupLocation.CenterScreen,
+                ResizeMode = ResizeMode.NoResize
+            };
+            var panel = new StackPanel { Margin = new Thickness(10) };
+            panel.Children.Add(new TextBlock
+            {
+                Text = "请输入 SN，每行一个。须与已加载产品同 Spec。",
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 6)
+            });
+            var input = new TextBox
+            {
+                AcceptsReturn = true,
+                Height = 180,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+            };
+            panel.Children.Add(input);
+            var buttons = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Margin = new Thickness(0, 8, 0, 0)
+            };
+            bool confirmed = false;
+            var okBtn = new Button { Content = "确定", Width = 72, Margin = new Thickness(4, 0, 0, 0) };
+            var cancelBtn = new Button { Content = "取消", Width = 72, Margin = new Thickness(4, 0, 0, 0) };
+            okBtn.Click += (s, args) => { confirmed = true; dialog.Close(); };
+            cancelBtn.Click += (s, args) => dialog.Close();
+            buttons.Children.Add(okBtn);
+            buttons.Children.Add(cancelBtn);
+            panel.Children.Add(buttons);
+            dialog.Content = panel;
+            dialog.ShowDialog();
+            if (!confirmed)
                 return;
 
+            string[] lines = input.Text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            batchSnQueue = new Queue<string>();
+            foreach (string line in lines)
+            {
+                string sn = (line ?? "").Trim().ToUpperInvariant();
+                if (sn.Length == 0)
+                    continue;
+                if (batchSnQueue.Count >= OpticalSwitchConfigNames.MaxProductsSinglePort)
+                {
+                    WarningBox(string.Format("最多批量打开 {0} 个 SN，超出部分已忽略。",
+                        OpticalSwitchConfigNames.MaxProductsSinglePort));
+                    break;
+                }
+                batchSnQueue.Enqueue(sn);
             }
+            if (batchSnQueue.Count == 0)
+            {
+                WarningBox("未输入有效 SN。");
+                batchSnQueue = null;
+                return;
+            }
+            TryOpenNextBatchSn();
+        }
+
+        private void TryOpenNextBatchSn()
+        {
+            if (batchSnQueue == null || batchSnQueue.Count == 0)
+            {
+                batchSnQueue = null;
+                RealtimeMsg("批量打开 SN 完成。");
+                return;
+            }
+            UIControl.SN = batchSnQueue.Dequeue();
+            Dispatcher.BeginInvoke(new Action(() => btnOpenTemplate_Click(this, new RoutedEventArgs())),
+                DispatcherPriority.ApplicationIdle);
+        }
+
+        private void btnOpenTemplate_Click(object sender, RoutedEventArgs e)
+        {
+            if (templateOpenInProgress)
+            {
+                RealtimeMsg("正在打开模板，请稍候...");
+                return;
+            }
+
+            if (allProductControl.Count == 0)
+            {
+                batchTestAborted = false;
+            }
+
             if (UIControl.SN != null && UIControl.SN.Length == 0)
             {
                 WarningBox("请输入产品号！！");
                 return;
             }
+
             if (mainInfo == null)
             {
                 ErrorBox("无工位信息，请检查配置！");
                 return;
             }
-            if(allProductControl.Count>=2&&portAndNameDic.Count==7)
+            if (portAndNameDic.Count > 0)
             {
-                ErrorBox("该工位最多支持测试2个7端口产品！");
-                return;
+                int maxProducts = OpticalSwitchConfigNames.GetMaxProductsForPortCount(portAndNameDic.Count);
+                if (maxProducts > 0 && allProductControl.Count >= maxProducts)
+                {
+                    ErrorBox(string.Format("该工位最多支持测试{0}个{1}端口产品！",
+                        maxProducts, portAndNameDic.Count));
+                    return;
+                }
             }
 
-            if (allProductControl.Count >= 8 && portAndNameDic.Count == 2)
+            if (portAndNameDic.Count > 0 &&
+                (allProductControl.Count + 1) * portAndNameDic.Count > OpticalSwitchConfigNames.MaxOutputSwitchChannels)
             {
-                ErrorBox("该工位最多支持测试8个3端口产品！");
+                ErrorBox(string.Format("产品数×端口数不能超过{0}（当前将超出出光开关通道容量）！",
+                    OpticalSwitchConfigNames.MaxOutputSwitchChannels));
                 return;
             }
             portRawdatas.Clear();
+            SetOpenTemplateComplete(false);
+            templateOpenInProgress = true;
             RealtimeMsg("正在打开模板...");
             curTestTmpt = -300;
             UIControl.IsSaveEnable = false;
             UIControl.IsScanEnable = false;
+            var workArgs = new OpenTemplateWorkArgs
+            {
+                Sn = UIControl.SN,
+                TestProcess = mainInfo.TestProcess,
+                UserId = mainInfo.UserID,
+                MachineName = Environment.MachineName,
+                ExistingSns = AllProducts.Select(p => p.SN).ToList(),
+                ExistingProductCount = allProductControl.Count
+            };
             BackgroundWorker templateBK = new BackgroundWorker();
             templateBK.DoWork += OpenTemplateBK_DoWork;
             templateBK.RunWorkerCompleted += OpenTemplateBK_RunWorkerCompleted;
-            templateBK.RunWorkerAsync();
+            templateBK.RunWorkerAsync(workArgs);
+        }
+
+        private sealed class OpenTemplateWorkArgs
+        {
+            public string Sn;
+            public string TestProcess;
+            public string UserId;
+            public string MachineName;
+            public List<string> ExistingSns;
+            public int ExistingProductCount;
+        }
+
+        private sealed class OpenTemplateWorkResult
+        {
+            public string ErrorMessage = "";
+            public string TemplateName = "";
+            public FusionControl FusionControl;
         }
 
         private string templateName = "";
@@ -704,44 +853,124 @@ namespace UIOperateInterleaverFinalTest
         /// </summary>
         /// <param name="sender"></param>
         /// <param name="e"></param>
-        private void OpenTemplateBK_DoWork(object sender, DoWorkEventArgs e)
+        /// <summary>
+        /// 在 STA 线程调用 TAS（USL.TAS.dll），避免 BackgroundWorker 默认 MTA 导致本机崩溃。
+        /// </summary>
+        private OpenTemplateWorkResult DoOpenTemplateOnStaThread(OpenTemplateWorkArgs args)
         {
-            foreach (TestProductInfo info in AllProducts)
+            var result = new OpenTemplateWorkResult();
+            if (args == null || string.IsNullOrEmpty(args.Sn))
             {
-                if (info.SN == UIControl.SN)
+                result.ErrorMessage = "打开模板参数无效。";
+                return result;
+            }
+            if (args.ExistingSns != null)
+            {
+                foreach (string existingSn in args.ExistingSns)
                 {
-                    e.Result= "该SN号已存在测试列表！";
-                    return;
+                    if (string.Equals(existingSn, args.Sn, StringComparison.OrdinalIgnoreCase))
+                    {
+                        result.ErrorMessage = "该SN号已存在测试列表！";
+                        return result;
+                    }
                 }
             }
             FusionControl control = new FusionControl();
             string errMsg = "";
-            //string templateName = "";
-            //allProductControl.Clear();
+            string tmplName = "";
             List<string> sptProcess = new List<string>();
-            string tmpltContent = control.OpenTemplate(UIControl.SN, mainInfo.TestProcess, mainInfo.UserID, "", false, Environment.MachineName, sptProcess, out templateName, out errMsg);
-            if (tmpltContent.Length>0)
+            string tmpltContent = control.OpenTemplate(args.Sn, args.TestProcess, args.UserId, "", false,
+                args.MachineName, sptProcess, out tmplName, out errMsg);
+            result.TemplateName = tmplName ?? "";
+            if (tmpltContent.Length > 0)
             {
-                if(allProductControl.Count>0)
+                result.FusionControl = control;
+                result.ErrorMessage = "";
+            }
+            else
+            {
+                result.ErrorMessage = errMsg ?? "";
+            }
+            return result;
+        }
+
+        private void OpenTemplateBK_DoWork(object sender, DoWorkEventArgs e)
+        {
+            var args = e.Argument as OpenTemplateWorkArgs;
+            OpenTemplateWorkResult result = null;
+            Exception threadEx = null;
+            bool timedOut = false;
+            var staThread = new Thread(() =>
+            {
+                try
                 {
-                    if(allProductControl[0].GetProductInfo().Spec==control.GetProductInfo().Spec)
+                    result = DoOpenTemplateOnStaThread(args);
+                }
+                catch (Exception ex)
+                {
+                    threadEx = ex;
+                }
+            });
+            staThread.SetApartmentState(ApartmentState.STA);
+            staThread.IsBackground = true;
+            staThread.Start();
+            if (!staThread.Join(OpenTemplateStaTimeoutMs))
+                timedOut = true;
+
+            if (result == null)
+                result = new OpenTemplateWorkResult();
+            if (timedOut)
+                result.ErrorMessage = "打开模板超时（TAS/MES 无响应），请检查网络、工序与 data\\open_template.log。";
+            else if (threadEx != null)
+            {
+                result.ErrorMessage = "打开模板异常：" + threadEx.Message;
+                CommonFunction.WriteLog("OpenTemplateBK_DoWork STA: " + threadEx);
+            }
+            e.Result = result;
+        }
+
+        private void FinishOpenTemplateFailed(string errMsg)
+        {
+            templateOpenInProgress = false;
+            if (allProductControl.Count > 0)
+            {
+                UIControl.IsScanEnable = true;
+            }
+            batchSnQueue = null;
+            RealtimeMsg(errMsg, StatusType.Error);
+            ErrorBox(errMsg);
+        }
+
+        private static void TryOpenTemplateNoticeHtmlAsync(FusionControl fusionControl)
+        {
+            if (fusionControl == null)
+                return;
+            Task.Run(() =>
+            {
+                try
+                {
+                    var productInfo = fusionControl.GetProductInfo();
+                    string strUrl = string.Format("\\\\zh-mfs-srv\\Public\\TestTemplate\\{0}\\{1}@{2}.HTML",
+                        productInfo.ProductPN, productInfo.ProductPN, productInfo.SpecNum);
+                    if (File.Exists(strUrl))
                     {
-                        allProductControl.Add(control);
-                    }
-                    else
-                    {
-                        e.Result = "该产品Spec与测试列表Spen不一致！";
-                        return;
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = strUrl,
+                            WindowStyle = ProcessWindowStyle.Normal
+                        });
                     }
                 }
-                else
-                    allProductControl.Add(control);
-            }
-            e.Result = errMsg;
+                catch (Exception ex)
+                {
+                    CommonFunction.WriteLog("TryOpenTemplateNoticeHtmlAsync: " + ex.Message);
+                }
+            });
         }
 
         private void ClearListData()
         {
+            batchTestAborted = false;
             testItemShow = new FusionControl();
             // 更新测试信息
             if (EventAggregator != null)
@@ -772,14 +1001,68 @@ namespace UIOperateInterleaverFinalTest
         /// </summary>
         private void UpdateResIcon()
         {
-            string errMsg = "";
             passOrFailImg.Source = passBitmapImage;
+            if (!GetOpenTemplateComplete())
+                return;
+
+            string errMsg = "";
             for (int i = 0; i < allProductControl.Count; i++)
             {
+                if (!allProductControl[i].GetHasTested())
+                    continue;
                 if (!allProductControl[i].GetAllTestedPassed(ref errMsg))
                 {
                     passOrFailImg.Source = failBitmapImage;
+                    return;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 根据 FusionControl 与扫描状态解析单个产品的列表状态。
+        /// </summary>
+        private ProductTestStatus ResolveProductStatus(int index)
+        {
+            if (index < 0 || index >= AllProducts.Count || index >= allProductControl.Count)
+            {
+                return ProductTestStatus.NotStarted;
+            }
+            if (AllProducts[index].HasScanError)
+            {
+                return ProductTestStatus.Error;
+            }
+
+            bool hasData = allProductControl[index].GetHasTested();
+            bool scanningThis = !GetIsScanFinished() && CurProductIndex == index;
+            // 仅打开模板、尚未扫描写入数据：列表状态置灰，不按 MES 历史不合格标红
+            if (!hasData && !scanningThis)
+            {
+                return ProductTestStatus.NotStarted;
+            }
+
+            string errMsg = "";
+            if (!allProductControl[index].GetAllTestedPassed(ref errMsg))
+            {
+                return ProductTestStatus.Error;
+            }
+            return ProductTestStatus.Ok;
+        }
+
+        private void UpdateProductStatuses()
+        {
+            for (int i = 0; i < AllProducts.Count; i++)
+            {
+                if (i >= allProductControl.Count)
+                {
                     break;
+                }
+                ProductTestStatus status = ResolveProductStatus(i);
+                Brush newBrush = TestProductInfo.BrushFor(status);
+                TestProductInfo p = AllProducts[i];
+                if (p.Status != status || !ReferenceEquals(p.StatusBrush, newBrush))
+                {
+                    p.Status = status;
+                    p.StatusBrush = newBrush;
                 }
             }
         }
@@ -787,39 +1070,30 @@ namespace UIOperateInterleaverFinalTest
         private List<FusionControl> testShowControl = new List<FusionControl>();
         private void ParamItemUpdate(int productID, bool isOpenTemplate = false)
         {
-            if (!GetOpenTemplateComplete())
+            if (!isOpenTemplate && !GetOpenTemplateComplete())
             {
                 return;
             }
             UpdateResIcon();
+            UpdateProductStatuses();
             if (isOpenTemplate)
             {
+                updateParamIndex.Clear();
                 List<int> deleteItems = new List<int>();
                 List<MESTestInfo> testInfos = allProductControl[productID].GetAllTestInfo();
-                testItemShow = allProductControl[productID].Clone();
+                try
+                {
+                    testItemShow = allProductControl[productID].Clone();
+                }
+                catch (Exception ex)
+                {
+                    CommonFunction.WriteLog("ParamItemUpdate Clone failed: " + ex.Message);
+                    testItemShow = allProductControl[productID];
+                }
                 for (int i = 0; i < testInfos.Count; i++)
                 {
-                    string param = testInfos[i].ExParamName.ToUpper();
-                    //通道名_频率_porti
-                    string[] splits = testInfos[i].PortNameForUser.Split('_');
-
-                    //筛选出需要显示的参数项，只显示总通道,子通道都是 通道名_中心频率_PORTi
-                    bool isNeedShow = false;
-                    if (splits.Length == 1)
-                    {
-                        if (testInfos[i].PortNameForUser.ToUpper() != "Frequency Range".ToUpper())
-                        {
-                            isNeedShow = true;
-                        }
-                    }
-                    else
-                    {
-                        /*if (!testInfos[i].Pass && testInfos[i].Tested)
-                        {
-                            isNeedShow = true;
-                        }*/
-                    }
-                    if (!isNeedShow)
+                    // 列表只显示总通道行（如 Demux-Even / Demux-Odd）；通道_频率_PORTn 子项仅用于扫描计算
+                    if (!ShouldShowTestItemInList(testInfos[i]))
                     {
                         //需要删除行
                         deleteItems.Add(i);
@@ -840,28 +1114,10 @@ namespace UIOperateInterleaverFinalTest
                     if (productID == 0)
                         testShowControl.Clear();
 
+                    // 打开模板时只发布一次列表；归零状态写入 testItemShow，勿对每行 UpdateItem（ITL 模板行数多会卡死 UI）
+                    SyncScanRefStatusToShowControl(testItemShow, productID);
                     testShowControl.Add(testItemShow);
                     EventAggregator.GetEvent<EventTemplateUpdate>().Publish(testShowControl);
-                }
-
-                if (EventAggregator != null)
-                {
-                    List<MESTestInfo> shows = testShowControl[productID].GetAllTestInfo();
-                    for (int i = 0; i < shows.Count; i++)
-                    {
-                        MESTestInfo info = shows[i];
-                        //UpdateItem(info, productID, i);
-                        for (int j = 0; j < portAssistant.Count; j++)
-                        {
-                            if (shows[i].PortNameForUser == portAssistant[j].Name &&
-                                productID == portAssistant[j].ProductIndex - 1)
-                            {
-                                testShowControl[productID].UpdateScanRefStatus(i, portAssistant[j].IsRef);
-                                UpdateItem(testShowControl[productID].GetAllTestInfo()[i], productID, i);
-                                break;
-                            }
-                        }
-                    }
                 }
             }
             else
@@ -870,27 +1126,19 @@ namespace UIOperateInterleaverFinalTest
                 List<MESTestInfo> shows = testShowControl[productID].GetAllTestInfo();
                 for (int i = 0; i < testInfos.Count; i++)
                 {
-                    string param = testInfos[i].ExParamName.ToUpper();
-                    //通道名_频率_porti
-                    string[] splits = testInfos[i].PortNameForUser.Split('_');
-                    if (splits.Length == 1)
+                    if (!ShouldShowTestItemInList(testInfos[i]))
+                        continue;
+                    for (int j = 0; j < shows.Count; j++)
                     {
-                        if (testInfos[i].PortNameForUser.ToUpper() != "Frequency Range".ToUpper())
+                        if (testInfos[i].PortNameForUser == shows[j].PortNameForUser
+                            && testInfos[i].Temperature == shows[j].Temperature
+                            && testInfos[i].ExParamName == shows[j].ExParamName)
                         {
-                            for(int j=0;j< shows.Count;j++)
-                            {
-                                if(testInfos[i].PortNameForUser== shows[j].PortNameForUser
-                                    &&testInfos[i].Temperature==shows[j].Temperature&&
-                                    testInfos[i].ExParamName==shows[j].ExParamName)
-                                {
-                                    bool isPass = false;
-                                    testShowControl[productID].UpdateTestData(j, testInfos[i].CurValue, ref isPass);
-                                    UpdateItem(testShowControl[productID].GetAllTestInfo()[j], productID, j);
-                                }
-                            }
+                            bool isPass = false;
+                            testShowControl[productID].UpdateTestData(j, testInfos[i].CurValue, ref isPass);
+                            UpdateItem(testShowControl[productID].GetAllTestInfo()[j], productID, j);
                         }
                     }
-
                 }
                 // 更新测试信息
             }
@@ -900,36 +1148,69 @@ namespace UIOperateInterleaverFinalTest
 
         private void OpenTemplateBK_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
         {
-            if (allProductControl.Count == 1)
+            try
             {
-                _scanList.Clear();
-                //打开注意事项网页
-                string strUrl =string.Format("\\\\zh-mfs-srv\\Public\\TestTemplate\\{0}\\{1}@{2}.HTML", 
-                    allProductControl[0].GetProductInfo().ProductPN, allProductControl[0].GetProductInfo().ProductPN, allProductControl[0].GetProductInfo().SpecNum);
-                ProcessStartInfo info = new ProcessStartInfo();
-                info.WindowStyle = ProcessWindowStyle.Normal;
-                info.FileName = strUrl;//需要启动的程序
-                if (File.Exists(strUrl))
+                if (e.Error != null)
                 {
-                    Process.Start(info);
+                    FinishOpenTemplateFailed("打开模板异常：" + e.Error.Message);
+                    return;
                 }
-                
-            }
-            string errMsg = (string)e.Result;
-            if (errMsg.Length == 0)
-            {
-                RealtimeMsg(UIControl.SN + "：打开模板成功！");
-                SetOpenTemplateComplete(true);
-                
+                var workResult = e.Result as OpenTemplateWorkResult;
+                if (workResult == null)
+                {
+                    FinishOpenTemplateFailed("打开模板返回无效。");
+                    return;
+                }
+                if (!string.IsNullOrEmpty(workResult.ErrorMessage))
+                {
+                    FinishOpenTemplateFailed(workResult.ErrorMessage);
+                    return;
+                }
+                if (workResult.FusionControl == null)
+                {
+                    FinishOpenTemplateFailed("未获取到模板内容。");
+                    return;
+                }
+                if (allProductControl.Count > 0 &&
+                    allProductControl[0].GetProductInfo().Spec != workResult.FusionControl.GetProductInfo().Spec)
+                {
+                    FinishOpenTemplateFailed("该产品Spec与测试列表Spen不一致！");
+                    return;
+                }
+                allProductControl.Add(workResult.FusionControl);
+                templateName = workResult.TemplateName ?? "";
+
                 TestProductInfo curInfo = new TestProductInfo();
-                curInfo.Index = AllProducts.Count+1;
+                curInfo.Index = AllProducts.Count + 1;
                 curInfo.SN = UIControl.SN;
                 AllProducts.Add(curInfo);
-                //列表显示  
-                //曲线显示处理
-                List<MESTestInfo> testInfos = allProductControl[allProductControl.Count - 1].AllTestInfo;
+                UpdateProductStatuses();
+                int productIdx = allProductControl.Count - 1;
+                RealtimeMsg("正在处理模板数据...");
+                Dispatcher.BeginInvoke(new Action(() => CompleteOpenTemplateUi(productIdx)), DispatcherPriority.Background);
+            }
+            catch (Exception ex)
+            {
+                FinishOpenTemplateFailed("处理模板结果异常：" + ex.Message);
+                CommonFunction.WriteLog("OpenTemplateBK_RunWorkerCompleted: " + ex);
+            }
+        }
+
+        private void CompleteOpenTemplateUi(int productIdx)
+        {
+            try
+            {
+                if (productIdx < 0 || productIdx >= allProductControl.Count)
+                {
+                    FinishOpenTemplateFailed("打开模板后产品索引无效。");
+                    return;
+                }
+                string errMsg = "";
+                List<MESTestInfo> testInfos = allProductControl[productIdx].AllTestInfo;
                 if (allProductControl.Count == 1)
                 {
+                    _scanList.Clear();
+                    TryOpenTemplateNoticeHtmlAsync(allProductControl[0]);
                     updateParamIndex.Clear();
                     portAndNameDic.Clear();
                     portAssistant.Clear();
@@ -1035,7 +1316,8 @@ namespace UIOperateInterleaverFinalTest
                 for (int i = 0; i < testInfos.Count; i++)
                 {
                     //转Fusion之后按照之前规则重组EX规则的参数名称
-                    if(testInfos[i].TestParam.GetMESTemplateKeywords().Contains("_BP"))
+                    if (testInfos[i].TestParam != null &&
+                        testInfos[i].TestParam.GetMESTemplateKeywords().Contains("_BP"))
                     {
                         testInfos[i].ExParamName = testInfos[i].TestParam + "@";
                         testInfos[i].ExParamName += testInfos[i].ConditionID;
@@ -1092,8 +1374,14 @@ namespace UIOperateInterleaverFinalTest
                             else
                                 assist.OperateIndex = assist.ProductIndex * portAndNameDic.Count + assist.PortIndex - 1;
 
-                            //if (assist.PortIndex > 2)
-                                assist.PMIndex = portAndPMDic[assist.PortIndex.ToString()];
+                            int pmIndex;
+                            string pmMapErr = "";
+                            if (!TryGetPmIndexForPort(assist.PortIndex, out pmIndex, ref pmMapErr))
+                            {
+                                errMsg += pmMapErr + "\r";
+                                continue;
+                            }
+                            assist.PMIndex = pmIndex;
 
                             //决定了一起扫描的端口
                             if (_scanList.Count>0)
@@ -1115,6 +1403,7 @@ namespace UIOperateInterleaverFinalTest
                             //else
                             //assist.PMIndex = assist.PortIndex;
                             assist.TmptID = testInfos[i].EnvironmentID;
+                            assist.SwitchChannel = ResolveOutputSwitchChannelAtTemplateLoad(assist);
                             portAssistant.Add(assist);
 
                             if (SWMaxPortFlag < Convert.ToInt32(assist.Port.Remove(0, 4)))
@@ -1135,22 +1424,40 @@ namespace UIOperateInterleaverFinalTest
                     curveShow.UpdateFre(minScanFre, maxScanFre);
                 }
 
-                ReadRefData(allProductControl.Count-1, portAssistant, ref errMsg);
-                ParamItemUpdate(allProductControl.Count-1,true);
-                UIControl.IsScanEnable = true;
-                if (errMsg.Length>0)
+                SWMaxPortFlag = Math.Max(SWMaxPortFlag, OpticalSwitchConfigNames.MaxOutputSwitchChannels);
+
+                if (IsDemuxDualPortTemplate())
                 {
-                    WarningBox(errMsg);
+                    int openedProductIndex = productIdx + 1;
+                    foreach (PortAssist assist in portAssistant)
+                    {
+                        if (assist.ProductIndex != openedProductIndex)
+                            continue;
+                        int demuxCh = GetDemuxOutputChannelForPortIndex(assist.ProductIndex, assist.PortIndex);
+                        if (demuxCh > 0)
+                            assist.SwitchChannel = demuxCh;
+                    }
                 }
+
+                ReadRefData(productIdx, portAssistant, ref errMsg);
+                SetOpenTemplateComplete(true);
+                ParamItemUpdate(productIdx, true);
+                UIControl.IsScanEnable = true;
+                RealtimeMsg(UIControl.SN + "：打开模板成功！");
+                if (errMsg.Length > 0)
+                    WarningBox(errMsg);
 
                 ShowTmpltPath();
 
+                templateOpenInProgress = false;
+
+                if (batchSnQueue != null && batchSnQueue.Count > 0)
+                    TryOpenNextBatchSn();
             }
-            else
+            catch (Exception ex)
             {
-                RealtimeMsg(errMsg, StatusType.Error);
-                ErrorBox(errMsg);
-                return;
+                FinishOpenTemplateFailed("处理模板数据异常：" + ex.Message);
+                CommonFunction.WriteLog("CompleteOpenTemplateUi: " + ex);
             }
         }
 
@@ -1259,6 +1566,25 @@ namespace UIOperateInterleaverFinalTest
                     string errMsg = "";
                     MessageBox.Show("归零完成！");
                     ReadRefData(allProductControl.Count - 1, portAssistant, ref errMsg);
+                    if (errMsg.Length > 0)
+                    {
+                        WarningBox(errMsg);
+                        break;
+                    }
+                    string uploadRefErr = "";
+                    if (!FusionControl.UploadRefCalibrationTime(mainInfo.UserID, ref uploadRefErr))
+                    {
+                        string uploadFailMsg = "上传归零时间到 TMS 失败：" + uploadRefErr;
+                        CommonFunction.WriteLog(uploadFailMsg);
+                        WarningBox(uploadFailMsg + "\r\n本地归零文件已保存，可继续测试。请检查 GDS/TMS 服务网络，或确认 USL.TAS.dll 与 USL.SYS 配置与产线一致。");
+                        RealtimeMsg("归零完成（TMS 上传失败，见日志）。");
+                    }
+                    else
+                    {
+                        RealtimeMsg("归零时间已上传 TMS。");
+                    }
+                    UIControl.IsScanEnable = true;
+                    UIControl.IsReferenceEnable = true;
                     break;
                 }
                 //只需要对一个温度进行归零即可
@@ -1274,8 +1600,31 @@ namespace UIOperateInterleaverFinalTest
                     //切换光源盒
                     if (GetIsScanFinished())
                     {
-                        SetSwitch(portAssistant[referenceIndex].ProductIndex, portAssistant[referenceIndex].Port);
-                        int portIndex = portAssistant[referenceIndex].PortIndex;
+                        PortAssist refAssist = portAssistant[referenceIndex];
+                        if (TasRuntimeConfig.IsRefAutoSwitchDisabled())
+                        {
+                            if (!ShowManualRefSwitchPrompt(refAssist))
+                            {
+                                UIControl.IsScanEnable = true;
+                                UIControl.IsReferenceEnable = true;
+                                break;
+                            }
+                            RealtimeMsg("手动光路模式：已跳过自动光开关，请确认入光/出光盒 MSW 与弹窗 flag 一致。");
+                        }
+                        else
+                        {
+                            string switchErr = "";
+                            if (!SetSwitch(refAssist.ProductIndex, refAssist.Port, ref switchErr))
+                            {
+                                ErrorBox(string.IsNullOrEmpty(switchErr) ? "切换光开关失败。" : switchErr);
+                                UIControl.IsScanEnable = true;
+                                UIControl.IsReferenceEnable = true;
+                                break;
+                            }
+                        }
+
+                        ReadRefPowerSnapshot(refAssist);
+                        int portIndex = refAssist.PortIndex;
                         SetIsScanFinished(false);
                         RealtimeMsg(prompt);
                         BackgroundWorker bkPM = new BackgroundWorker();
@@ -1284,7 +1633,7 @@ namespace UIOperateInterleaverFinalTest
                         scanDetailInfo.ScanType = SCANTYPE.RefWithPDL;
                         scanDetailInfo.Ports.Clear();
                         scanDetailInfo.Ports.Add(portIndex);
-                        scanDetailInfo.ProductIndex = portAssistant[referenceIndex].ProductIndex;
+                        scanDetailInfo.ProductIndex = refAssist.ProductIndex;
                         bkPM.RunWorkerAsync(scanDetailInfo);
                         UIControl.IsScanEnable = false;
                         UIControl.IsReferenceEnable = false;
@@ -1298,33 +1647,633 @@ namespace UIOperateInterleaverFinalTest
             }
         }
 
-        private void SetSwitch(int productIndex,string portName)
+        /// <summary>
+        /// 测试项是否应在下方列表显示（仅总通道行 Demux-Even/Odd，不含 通道_频率_PORTn 子项）。
+        /// </summary>
+        private static bool ShouldShowTestItemInList(MESTestInfo testInfo)
         {
-            string flagPort=portName.Replace(" ", "");
-            //flag最后一位用模板里port最大index，兼容产品两个port都是odd或者even的情况
-            string flag = productIndex.ToString()+"::" + flagPort.ToUpper() + ":"+ SWMaxPortFlag.ToString();
-            //RealtimeMsg("开始切换开关");
-            string errMsg = "";
-            IOpticalSwitch opticalSwitch = null;
-            //if (DeviceControl.GetSwitchByType("InterleaverFinalTestSwitch", ref opticalSwitch, ref errMsg) == 0)
-            if (DeviceControl.GetSwitchByIndex(1, ref opticalSwitch, ref errMsg) == 0)            
+            if (testInfo == null)
+                return false;
+            if (string.IsNullOrWhiteSpace(testInfo.PortNameForUser))
+                return false;
+            if (string.Equals(testInfo.PortNameForUser, "Frequency Range", StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (testInfo.PortNameForUser.IndexOf('_') >= 0)
+                return false;
+            if (testInfo.TestParam == MESParam.Default)
+                return false;
+            return true;
+        }
+
+        /// <summary>
+        /// 将 portAssistant 的归零状态写入待显示的 FusionControl（按通道名匹配，含 L3-4_频率_PORTn）。
+        /// </summary>
+        private void SyncScanRefStatusToShowControl(FusionControl showControl, int productIndex)
+        {
+            if (showControl == null || portAssistant == null || portAssistant.Count == 0)
+                return;
+            int rowCount = showControl.AllTestInfo != null ? showControl.AllTestInfo.Count : 0;
+            for (int i = 0; i < rowCount; i++)
             {
-                if (opticalSwitch != null)
+                MESTestInfo row = showControl.AllTestInfo[i];
+                if (row == null)
+                    continue;
+                for (int j = 0; j < portAssistant.Count; j++)
                 {
-                    if (opticalSwitch.SetSwitch(flag, ref errMsg) == 0)
+                    PortAssist assist = portAssistant[j];
+                    if (productIndex == assist.ProductIndex - 1 &&
+                        PortNameMatchesChannel(row.PortNameForUser, assist.Name))
                     {
-                        RealtimeMsg("切换开关成功！");
+                        showControl.UpdateScanRefStatus(i, assist.IsRef);
+                        break;
                     }
                 }
             }
-            if (errMsg.Length > 0)
+        }
+
+        /// <summary>
+        /// 列表行 PortNameForUser 与 portAssistant 通道名匹配（支持 L3-4 或 L3-4_频率_PORT1）。
+        /// </summary>
+        private static bool PortNameMatchesChannel(string portNameForUser, string channelName)
+        {
+            if (string.IsNullOrWhiteSpace(portNameForUser) || string.IsNullOrWhiteSpace(channelName))
+                return false;
+            if (string.Equals(portNameForUser, channelName, StringComparison.OrdinalIgnoreCase))
+                return true;
+            return portNameForUser.StartsWith(channelName + "_", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private int ResolveSwitchChannel(string portDisplayName, string portKey)
+        {
+            string nameKey = (portDisplayName ?? "").Replace(" ", "");
+            if (nameKey.Length > 0 && SwitchPortChannelMap.TryGetValue(nameKey, out int mapped))
+                return mapped;
+
+            string port = (portKey ?? "").Replace(" ", "").ToUpperInvariant();
+            if (port.StartsWith("PORT") && port.Length > 4 &&
+                int.TryParse(port.Substring(4), out int portNum) &&
+                portNum >= 1 && portNum <= OpticalSwitchConfigNames.MaxOutputSwitchChannels)
+                return portNum;
+
+            return -1;
+        }
+
+        /// <summary>
+        /// 16 SN×1 路：多产品且每 SN 仅 1 逻辑端口时，PORT1 映射到工位槽位（ProductIndex）。
+        /// </summary>
+        private int ApplySinglePortSlotChannelMapping(int productIndex, int channelFromPort)
+        {
+            if (productIndex < 1 || allProductControl.Count <= 1 || portAndNameDic.Count != 1)
+                return channelFromPort;
+
+            if (channelFromPort == 1)
+                return productIndex;
+            if (channelFromPort >= 1 && channelFromPort <= OpticalSwitchConfigNames.MaxInputSwitchChannels)
+                return channelFromPort;
+
+            return productIndex;
+        }
+
+        private int GetInputChannelForProduct(int productIndex)
+        {
+            return ApplySinglePortSlotChannelMapping(productIndex, 1);
+        }
+
+        /// <summary>
+        /// 单 SN + 多 PORT（如 Demux Even/Odd）：一口入、两口出，入光固定 SN 槽位。
+        /// </summary>
+        private bool IsSingleProductMultiPortMode()
+        {
+            return allProductControl.Count == 1 && portAndNameDic.Count >= 2;
+        }
+
+        /// <summary>
+        /// 模板含 Demux-Even/Odd 等双口（单 SN 或逐个打开模板累加多 SN 均适用）。
+        /// </summary>
+        private bool IsDemuxDualPortTemplate()
+        {
+            if (portAndNameDic.Count < 2)
+                return false;
+            foreach (string key in portAndNameDic.Keys)
             {
-                RealtimeMsg("切换开关失败:" + errMsg);
+                if (key.IndexOf("Demux", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            }
+            return false;
+        }
+
+        private static int TryParsePortIndex(string portKey)
+        {
+            string port = (portKey ?? "").Replace(" ", "").ToUpperInvariant();
+            if (port.StartsWith("PORT") && port.Length > 4 &&
+                int.TryParse(port.Substring(4), out int portIndex))
+                return portIndex;
+            return 0;
+        }
+
+        /// <summary>
+        /// Demux 双口递推规则（N 从 1 开始）：
+        /// PORT1（Even）= N+16；PORT2（Odd）= N。
+        /// 示例：产品1 -> 17/1，产品2 -> 18/2。
+        /// </summary>
+        private static int GetDemuxOutputChannelForPortIndex(int productIndex, int portIndex)
+        {
+            if (productIndex < 1)
+                return -1;
+            if (portIndex == 1)
+            {
+                int evenChannel = productIndex + 16;
+                return (evenChannel >= 1 && evenChannel <= OpticalSwitchConfigNames.MaxOutputSwitchChannels)
+                    ? evenChannel : -1;
+            }
+            if (portIndex == 2)
+            {
+                int oddChannel = productIndex;
+                return (oddChannel >= 1 && oddChannel <= OpticalSwitchConfigNames.MaxOutputSwitchChannels)
+                    ? oddChannel : -1;
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// Demux 最简规则：入光 flag 产品序号位固定为 1（1::k:16）。
+        /// </summary>
+        private int GetInputFlagProductSerial(int productIndex)
+        {
+            if (IsDemuxDualPortTemplate())
+                return 1;
+            return productIndex;
+        }
+
+        /// <summary>
+        /// 入光通道：Demux 双口每 SN 占 1 入光槽（Even/Odd 共用 productIndex）；多口产品按 PORT/L 名解析；否则回退 SN 槽位映射。
+        /// </summary>
+        private int GetInputChannelForProductPort(int productIndex, string portKey)
+        {
+            if (IsDemuxDualPortTemplate())
+            {
+                if (productIndex >= 1 && productIndex <= OpticalSwitchConfigNames.MaxInputSwitchChannels)
+                    return productIndex;
+                return GetInputChannelForProduct(productIndex);
+            }
+
+            int ch = ResolvePortChannelWithoutDemuxOverride(productIndex, portKey);
+            if (ch >= 1 && ch <= OpticalSwitchConfigNames.MaxInputSwitchChannels)
+                return ch;
+            return GetInputChannelForProduct(productIndex);
+        }
+
+        /// <summary>
+        /// 按 PORT/L 解析通道（不含 Demux 出光 9/11 映射）。
+        /// </summary>
+        private int ResolvePortChannelWithoutDemuxOverride(int productIndex, string portKey)
+        {
+            foreach (PortAssist assist in portAssistant)
+            {
+                if (assist.ProductIndex == productIndex &&
+                    string.Equals(assist.Port, portKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    int channel = ResolveSwitchChannel(assist.Name, assist.Port);
+                    return ApplySinglePortSlotChannelMapping(productIndex, channel);
+                }
+            }
+            int fallback = ResolveSwitchChannel(null, portKey);
+            return ApplySinglePortSlotChannelMapping(productIndex, fallback);
+        }
+
+        /// <summary>
+        /// 打开模板时写入 PortAssist.SwitchChannel（与运行时出光通道一致）。
+        /// </summary>
+        private int ResolveOutputSwitchChannelAtTemplateLoad(PortAssist assist)
+        {
+            if (IsDemuxDualPortTemplate())
+            {
+                int demuxCh = GetDemuxOutputChannelForPortIndex(assist.ProductIndex, assist.PortIndex);
+                if (demuxCh > 0)
+                    return demuxCh;
+            }
+            int switchChannel = ResolveSwitchChannel(assist.Name, assist.Port);
+            return ApplySinglePortSlotChannelMapping(assist.ProductIndex, switchChannel);
+        }
+
+        /// <summary>
+        /// 出光通道：Demux 映射模块9/11；否则按 L 名 / PORTn / 槽位解析。
+        /// </summary>
+        private int GetOutputChannelForProductPort(int productIndex, string portKey)
+        {
+            if (IsDemuxDualPortTemplate())
+            {
+                int demuxCh = GetDemuxOutputChannelForPortIndex(productIndex, TryParsePortIndex(portKey));
+                if (demuxCh > 0)
+                    return demuxCh;
+            }
+
+            foreach (PortAssist assist in portAssistant)
+            {
+                if (assist.ProductIndex == productIndex &&
+                    string.Equals(assist.Port, portKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (assist.SwitchChannel > 0)
+                        return assist.SwitchChannel;
+                    int channel = ResolveSwitchChannel(assist.Name, assist.Port);
+                    return ApplySinglePortSlotChannelMapping(productIndex, channel);
+                }
+            }
+            int fallback = ResolveSwitchChannel(null, portKey);
+            return ApplySinglePortSlotChannelMapping(productIndex, fallback);
+        }
+
+        private int GetPmIndexForProductPort(int productIndex, string portKey, ref string errMsg)
+        {
+            foreach (PortAssist assist in portAssistant)
+            {
+                if (assist.ProductIndex == productIndex &&
+                    string.Equals(assist.Port, portKey, StringComparison.OrdinalIgnoreCase) &&
+                    assist.PMIndex > 0)
+                    return assist.PMIndex;
+            }
+
+            string port = (portKey ?? "").Replace(" ", "").ToUpperInvariant();
+            if (port.StartsWith("PORT") && port.Length > 4 &&
+                int.TryParse(port.Substring(4), out int portIndex))
+            {
+                int pmIndex;
+                if (TryGetPmIndexForPort(portIndex, out pmIndex, ref errMsg))
+                    return pmIndex;
+            }
+
+            return 0;
+        }
+
+        private bool IsDualSwitchConfigured()
+        {
+            IOpticalSwitch sw = null;
+            string err = "";
+            return DeviceControl.GetSwitchByType(OpticalSwitchConfigNames.InterleaverMplus1X16In, ref sw, ref err) == 0 &&
+                   DeviceControl.GetSwitchByType(OpticalSwitchConfigNames.InterleaverMplus1X32Out, ref sw, ref err) == 0;
+        }
+
+        /// <summary>
+        /// 入光盒 MSW：SW1 级联选路（1,1,2=绿灯上路→模块9；1,1,1=红灯下路→模块10）+ 1×8 选通道。
+        /// </summary>
+        private static string FormatInputMplusMswForChannel(int inChannel)
+        {
+            if (inChannel < 1 || inChannel > OpticalSwitchConfigNames.MaxInputSwitchChannels)
+                return "";
+            if (inChannel <= 8)
+                return string.Format("MSW 1,1,2;9,1,{0};", inChannel);
+            return string.Format("MSW 1,1,1;10,1,{0};", inChannel - 8);
+        }
+
+        /// <summary>
+        /// 出光盒 MSW：SW1/SW2 级联（1,1,2/1,1,1→模块9/10；2,1,2/2,1,1→模块11/12）+ 1×8 选通道。
+        /// </summary>
+        private static string FormatOutputMplusMswForChannel(int outChannel)
+        {
+            if (outChannel < 1 || outChannel > OpticalSwitchConfigNames.MaxOutputSwitchChannels)
+                return "";
+            if (outChannel <= 8)
+                return string.Format("MSW 1,1,2;9,1,{0};", outChannel);
+            if (outChannel <= 16)
+                return string.Format("MSW 1,1,1;10,1,{0};", outChannel - 8);
+            if (outChannel <= 24)
+                return string.Format("MSW 2,1,2;11,1,{0};", outChannel - 16);
+            return string.Format("MSW 2,1,1;12,1,{0};", outChannel - 24);
+        }
+
+        /// <summary>
+        /// 手动光路对比实验：弹窗显示程序本应下发的 flag，操作员确认后返回 true。
+        /// </summary>
+        private bool ShowManualRefSwitchPrompt(PortAssist assist)
+        {
+            if (assist == null)
+                return false;
+
+            int productIndex = assist.ProductIndex;
+            string portKey = assist.Port;
+            int outChannel = GetOutputChannelForProductPort(productIndex, portKey);
+            string pmErr = "";
+            int pmIndex = GetPmIndexForProductPort(productIndex, portKey, ref pmErr);
+            int outputFlagProductSerial = GetOutputFlagProductSerial(productIndex, portKey, pmIndex);
+            int inChannel = GetInputChannelForProductPort(productIndex, portKey);
+
+            string switchDir = Path.Combine(Environment.CurrentDirectory, "switch");
+            StringBuilder body = new StringBuilder();
+            body.AppendLine("【手动光路模式】已跳过自动光开关。");
+            body.AppendLine(string.Format("产品 {0}，通道 {1}，端口 {2}", productIndex, assist.Name, portKey));
+            body.AppendLine();
+            body.AppendLine("请在外部串口/工具对入光盒、出光盒手动下发 MSW 后点「确定」。");
+            body.AppendLine("下表为程序自动模式将使用的 flag（可在 switch 指令表中查找对应 MSW 行）：");
+            body.AppendLine();
+
+            if (IsDualSwitchConfigured())
+            {
+                int inProductSerial = GetInputFlagProductSerial(productIndex);
+                string inFlag = inProductSerial.ToString() + "::" + inChannel.ToString() + ":" +
+                                OpticalSwitchConfigNames.MaxInputSwitchChannels.ToString();
+                body.AppendLine("入光盒（1×16 级联：ch1~8 → MSW 1,1,2;9,1,n；ch9~16 → MSW 1,1,1;10,1,n）：");
+                body.AppendLine("  flag = " + inFlag);
+                body.AppendLine("  MSW = " + FormatInputMplusMswForChannel(inChannel));
+                body.AppendLine("  文件 = " + Path.Combine(switchDir, OpticalSwitchConfigNames.InterleaverMplus1X16In));
+                if (outputFlagProductSerial >= 1)
+                {
+                    string outFlag = outputFlagProductSerial.ToString() + "::" + outChannel.ToString() + ":" +
+                                     OpticalSwitchConfigNames.MaxOutputSwitchChannels.ToString();
+                    body.AppendLine("出光盒（1×32 级联：ch1~8→1,1,2;9 / 9~16→1,1,1;10 / 17~24→2,1,2;11 / 25~32→2,1,1;12）：");
+                    body.AppendLine("  flag = " + outFlag);
+                    body.AppendLine("  MSW = " + FormatOutputMplusMswForChannel(outChannel));
+                    body.AppendLine("  文件 = " + Path.Combine(switchDir, OpticalSwitchConfigNames.InterleaverMplus1X32Out));
+                }
+                else
+                {
+                    body.AppendLine("出光盒：未配置 GROUP 功率计映射 — " + pmErr);
+                }
+                body.AppendLine();
+                body.AppendLine(string.Format("（参考）出光通道 outChannel={0}，入光通道 inChannel={1}", outChannel, inChannel));
+            }
+            else
+            {
+                string legacyFlag = productIndex.ToString() + "::" + outChannel.ToString() + ":" + SWMaxPortFlag.ToString();
+                body.AppendLine("单盒/旧版 MPLUS：");
+                body.AppendLine("  flag = " + legacyFlag);
+                body.AppendLine("  文件 = " + Path.Combine(switchDir, OpticalSwitchConfigNames.InterleaverMplus1X16));
+            }
+
+            RealtimeMsg(string.Format("手动光路：产品{0} {1} 预期入通道{2} 出通道{3} PM{4}",
+                productIndex, assist.Name, inChannel, outChannel, pmIndex > 0 ? pmIndex.ToString() : "?"));
+
+            return MessageBox.Show(body.ToString(), "手动光路 — 请切换开关", MessageBoxButton.OKCancel,
+                MessageBoxImage.Information) == MessageBoxResult.OK;
+        }
+
+        /// <summary>
+        /// 归零扫描前读取功率计瞬时功率（用于手动光路对比实验）。
+        /// </summary>
+        private void ReadRefPowerSnapshot(PortAssist assist)
+        {
+            if (assist == null || DeviceControl == null)
                 return;
+
+            HashSet<int> pmIndices = new HashSet<int>();
+            string pmErr = "";
+            int curPm = GetPmIndexForProductPort(assist.ProductIndex, assist.Port, ref pmErr);
+            if (curPm > 0)
+                pmIndices.Add(curPm);
+            if (assist.PMIndex > 0)
+                pmIndices.Add(assist.PMIndex);
+
+            foreach (int pm in portAndPMDic.Values)
+            {
+                if (pm > 0)
+                    pmIndices.Add(pm);
+            }
+
+            if (pmIndices.Count == 0)
+            {
+                RealtimeMsg("手动光路功率：未配置 GROUP 功率计映射，请用扫描结果判断是否有光。");
+                return;
+            }
+
+            List<string> powerLines = new List<string>();
+            List<RealtimePowerInfo> realtimePowers = new List<RealtimePowerInfo>();
+            foreach (int pmIndex in pmIndices.OrderBy(i => i))
+            {
+                IPowermeter pm = null;
+                int channel = 0;
+                string errMsg = "";
+                if (DeviceControl.GetPowermeterByIndex(pmIndex, ref channel, ref pm, ref errMsg) != 0 || pm == null)
+                {
+                    powerLines.Add(string.Format("PM{0}=（设备未配置）", pmIndex));
+                    continue;
+                }
+
+                List<double> powerAvgs;
+                if (pm.ReadPowerAvg(ref errMsg, out powerAvgs, 3, false, channel.ToString()) != 0 ||
+                    powerAvgs == null || powerAvgs.Count == 0)
+                {
+                    powerLines.Add(string.Format("PM{0}=读数失败", pmIndex));
+                    continue;
+                }
+
+                double dbm = powerAvgs[0];
+                powerLines.Add(string.Format("PM{0}={1:F2} dBm", pmIndex, dbm));
+                RealtimePowerInfo info = new RealtimePowerInfo();
+                info.Prefix = "PM" + pmIndex;
+                info.Power = dbm.ToString("F2") + " dBm";
+                realtimePowers.Add(info);
+            }
+
+            string summary = "手动光路功率：" + string.Join(", ", powerLines);
+            RealtimeMsg(summary);
+            CommonFunction.WriteLog(summary);
+
+            if (EventAggregator != null && realtimePowers.Count > 0)
+                EventAggregator.GetEvent<EventRealtimePowerUpdate>().Publish(realtimePowers);
+        }
+
+        private bool TryExecuteSwitchOnNamedDevice(string switchShowName, string flag, ref string errMsg)
+        {
+            IOpticalSwitch opticalSwitch = null;
+            errMsg = "";
+            if (DeviceControl.GetSwitchByType(switchShowName, ref opticalSwitch, ref errMsg) != 0 || opticalSwitch == null)
+                return false;
+
+            return opticalSwitch.SetSwitch(flag, ref errMsg) == 0;
+        }
+
+        private bool TryExecuteSwitchCommand(string switchShowName, string flag, string roleLabel, ref string errMsg)
+        {
+            errMsg = "";
+            if (TryExecuteSwitchOnNamedDevice(switchShowName, flag, ref errMsg))
+            {
+                RealtimeMsg(string.Format("切换{0}成功！(flag={1})", roleLabel, flag));
+                return true;
+            }
+
+            // 产线仅部署旧版 switch\interleaverSwitch-MPLUS 时，入光 flag（1::n:16）仍可匹配
+            if (string.Equals(switchShowName, OpticalSwitchConfigNames.InterleaverMplus1X16In, StringComparison.OrdinalIgnoreCase))
+            {
+                string legacyErr = "";
+                if (TryExecuteSwitchOnNamedDevice(OpticalSwitchConfigNames.InterleaverMplus1X16, flag, ref legacyErr))
+                {
+                    RealtimeMsg(string.Format("切换{0}成功（使用旧版 switch\\{1}，建议部署 switch\\{2}）。(flag={3})",
+                        roleLabel, OpticalSwitchConfigNames.InterleaverMplus1X16,
+                        OpticalSwitchConfigNames.InterleaverMplus1X16In, flag));
+                    return true;
+                }
+                if (string.IsNullOrEmpty(errMsg))
+                    errMsg = legacyErr;
+            }
+
+            string switchFile = System.IO.Path.Combine(Environment.CurrentDirectory, "switch", switchShowName);
+            if (string.IsNullOrEmpty(errMsg))
+                errMsg = string.Format("未找到指令配置文件或 flag={0}。请确认存在: {1}", flag, switchFile);
+            else if (errMsg.IndexOf("未找到", StringComparison.OrdinalIgnoreCase) < 0)
+                errMsg += string.Format("（指令表: {0}, flag={1}）", switchFile, flag);
+
+            return false;
+        }
+
+        private bool SetInputSwitch(int inputProductSerial, int inChannel, ref string errMsg)
+        {
+            errMsg = "";
+            if (inChannel < 1 || inChannel > OpticalSwitchConfigNames.MaxInputSwitchChannels)
+            {
+                errMsg = string.Format("切换入光开关失败:入通道 {0} 无效(1-{1})",
+                    inChannel, OpticalSwitchConfigNames.MaxInputSwitchChannels);
+                return false;
+            }
+
+            string flag = inputProductSerial.ToString() + "::" + inChannel.ToString() + ":" +
+                            OpticalSwitchConfigNames.MaxInputSwitchChannels.ToString();
+            if (TryExecuteSwitchCommand(
+                OpticalSwitchConfigNames.InterleaverMplus1X16In, flag, "入光开关", ref errMsg))
+                return true;
+
+            return false;
+        }
+
+        private bool SetOutputSwitch(int pmIndex, int outChannel, ref string errMsg)
+        {
+            errMsg = "";
+            if (outChannel < 1 || outChannel > OpticalSwitchConfigNames.MaxOutputSwitchChannels)
+            {
+                errMsg = string.Format("切换出光开关失败:出通道 {0} 无效(1-{1})",
+                    outChannel, OpticalSwitchConfigNames.MaxOutputSwitchChannels);
+                return false;
+            }
+            if (pmIndex < 1)
+            {
+                errMsg = "切换出光开关失败:未配置功率计映射(GROUP)";
+                return false;
+            }
+
+            string flag = pmIndex.ToString() + "::" + outChannel.ToString() + ":" +
+                            OpticalSwitchConfigNames.MaxOutputSwitchChannels.ToString();
+            if (TryExecuteSwitchCommand(OpticalSwitchConfigNames.InterleaverMplus1X32Out, flag, "出光开关", ref errMsg))
+                return true;
+
+            // 兼容仅保留 [1::x:32] 的最小 OUT 指令表：优先按 PMIndex；失败后自动回退到 PM1。
+            if (pmIndex != 1)
+            {
+                string fallbackFlag = "1::" + outChannel.ToString() + ":" +
+                                      OpticalSwitchConfigNames.MaxOutputSwitchChannels.ToString();
+                string fallbackErr = "";
+                if (TryExecuteSwitchCommand(OpticalSwitchConfigNames.InterleaverMplus1X32Out, fallbackFlag, "出光开关", ref fallbackErr))
+                {
+                    RealtimeMsg(string.Format("出光开关已回退到 PM1 路由（原flag={0}，回退flag={1}）。", flag, fallbackFlag));
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 出光 flag 的第一段序号。
+        /// Demux 双口按现场约定固定为 1（1::x:32）；其他模板沿用 PMIndex。
+        /// </summary>
+        private int GetOutputFlagProductSerial(int productIndex, string portKey, int pmIndex)
+        {
+            if (IsDemuxDualPortTemplate())
+                return 1;
+            return pmIndex;
+        }
+
+        private int GetSwitchChannelForPort(int productIndex, string portKey)
+        {
+            return GetOutputChannelForProductPort(productIndex, portKey);
+        }
+
+        private bool TryGetPmIndexForPort(int portIndex, out int pmIndex, ref string errMsg)
+        {
+            pmIndex = 0;
+            string key = portIndex.ToString();
+            if (portAndPMDic.TryGetValue(key, out pmIndex))
+                return true;
+
+            errMsg = string.Format("端口 PORT{0} 未配置功率计映射，请在模板 CFG 的 GROUP 中设置（例如 PORT{0}:PM1）。", portIndex, portIndex);
+            return false;
+        }
+
+        private bool SetSwitch(int productIndex, string portKey, ref string errMsg)
+        {
+            errMsg = "";
+            int outChannel = GetSwitchChannelForPort(productIndex, portKey);
+            if (outChannel < 1 || outChannel > OpticalSwitchConfigNames.MaxOutputSwitchChannels)
+            {
+                errMsg = string.Format("切换开关失败:无法解析端口 {0} 对应的出光通道(1-{1})",
+                    portKey, OpticalSwitchConfigNames.MaxOutputSwitchChannels);
+                return false;
+            }
+
+            if (IsDualSwitchConfigured())
+            {
+                int inChannel = GetInputChannelForProductPort(productIndex, portKey);
+                int inProductSerial = GetInputFlagProductSerial(productIndex);
+                string pmErr = "";
+                int pmIndex = GetPmIndexForProductPort(productIndex, portKey, ref pmErr);
+                int outputFlagProductSerial = GetOutputFlagProductSerial(productIndex, portKey, pmIndex);
+                if (outputFlagProductSerial < 1)
+                {
+                    errMsg = pmErr;
+                    return false;
+                }
+                if (!SetInputSwitch(inProductSerial, inChannel, ref errMsg))
+                    return false;
+                if (!SetOutputSwitch(outputFlagProductSerial, outChannel, ref errMsg))
+                    return false;
+                return true;
+            }
+
+            // 兼容旧版单 MPLUS 指令表 interleaverSwitch-MPLUS
+            RealtimeMsg("提示:使用旧版单光开关配置，建议升级为 IN/OUT 双设备。");
+            string legacyFlag = productIndex.ToString() + "::" + outChannel.ToString() + ":" + SWMaxPortFlag.ToString();
+            IOpticalSwitch opticalSwitch = null;
+            if (DeviceControl.GetSwitchByType(OpticalSwitchConfigNames.InterleaverMplus1X16, ref opticalSwitch, ref errMsg) != 0)
+            {
+                errMsg = "";
+                DeviceControl.GetSwitchByIndex(1, ref opticalSwitch, ref errMsg);
+            }
+            if (opticalSwitch == null)
+            {
+                if (string.IsNullOrEmpty(errMsg))
+                    errMsg = "未找到可用的 MPLUS 光开关设备，请检查 set\\Deviceconfig.xml 与设备初始化。";
+                return false;
+            }
+            if (opticalSwitch.SetSwitch(legacyFlag, ref errMsg) == 0)
+            {
+                RealtimeMsg(string.Format("切换开关成功！(产品{0} 通道{1} flag={2})", productIndex, outChannel, legacyFlag));
+                return true;
+            }
+            return false;
+        }
+
+        private void SetSwitch(int productIndex, string portKey)
+        {
+            string errMsg = "";
+            if (!SetSwitch(productIndex, portKey, ref errMsg))
+            {
+                if (errMsg.Length > 0)
+                    RealtimeMsg("切换开关失败:" + errMsg);
             }
         }
 
-        
+        /// <summary>
+        /// 扫描/测试前切换光开关；失败时提示并返回 false（与系统归零同一套 Demux 入出光解析）。
+        /// </summary>
+        private bool TrySetSwitchBeforeScan(int productIndex, string portKey)
+        {
+            if (TasRuntimeConfig.IsRefAutoSwitchDisabled())
+                return true;
+
+            string switchErr = "";
+            if (SetSwitch(productIndex, portKey, ref switchErr))
+                return true;
+
+            ErrorBox(string.IsNullOrEmpty(switchErr) ? "切换光开关失败。" : switchErr);
+            return false;
+        }
 
         /// <summary>
         /// 读取归零数据
@@ -1475,7 +2424,9 @@ namespace UIOperateInterleaverFinalTest
 
                 if (scanInfo.ScanType == SCANTYPE.RefWithPDL)
                 {
-                    int pmIndex = portAndPMDic[scanInfo.Ports[0].ToString()];
+                    int pmIndex;
+                    if (!TryGetPmIndexForPort(scanInfo.Ports[0], out pmIndex, ref errMsg))
+                        return 2;
                     string pdlRefPath = string.Format("{0}-product{1}-port{2}.csv", refWithPDLFile, CurProductIndex + 1, scanInfo.Ports[0]);
 
 
@@ -1503,7 +2454,9 @@ namespace UIOperateInterleaverFinalTest
                     {
                         for (int j = 0; j < scanInfo.Ports.Count; j++)
                         {
-                            int pmIndex = portAndPMDic[scanInfo.Ports[j].ToString()];
+                            int pmIndex;
+                            if (!TryGetPmIndexForPort(scanInfo.Ports[j], out pmIndex, ref errMsg))
+                                return 2;
                             int dataIndex = (scanInfo.ProductIndex - 1) * portAndNameDic.Count + scanInfo.Ports[j] - 1;
 
                             string path = scanWithPDLFile + pmIndex.ToString() + ".csv";
@@ -1572,7 +2525,9 @@ namespace UIOperateInterleaverFinalTest
                 }
                 if (scanInfo.ScanType == SCANTYPE.RefWithPDL)
                 {
-                    int pmIndex = portAndPMDic[scanInfo.Ports[0].ToString()];
+                    int pmIndex;
+                    if (!TryGetPmIndexForPort(scanInfo.Ports[0], out pmIndex, ref errMsg))
+                        return 2;
                     
                     //读取四个偏振态下原始数据
                     for (int i = 0; i < 4; i++)
@@ -1606,7 +2561,9 @@ namespace UIOperateInterleaverFinalTest
                     {
                         for (int j = 0; j < scanInfo.Ports.Count; j++)
                         {
-                            int pmIndex = portAndPMDic[scanInfo.Ports[j].ToString()];
+                            int pmIndex;
+                            if (!TryGetPmIndexForPort(scanInfo.Ports[j], out pmIndex, ref errMsg))
+                                return 2;
                             int dataIndex = (scanInfo.ProductIndex - 1) * portAndNameDic.Count + scanInfo.Ports[j] - 1;
                             //读取四个偏振态下原始数据
                             for (int i = 0; i < 4; i++)
@@ -1759,6 +2716,18 @@ namespace UIOperateInterleaverFinalTest
         /// <param name="scanType">扫描类型</param>
         private void DoScanOnBK()
         {
+            if (curTestTmpt > -299 && !TasRuntimeConfig.IsTccChamberCheckDisabled())
+            {
+                string chamberMsg;
+                if (!TryValidateChamberTemperature(curTestTmpt, out chamberMsg))
+                {
+                    RealtimeMsg(chamberMsg, StatusType.Error);
+                    ErrorBox(chamberMsg);
+                    UIControl.IsScanEnable = true;
+                    UIControl.IsSaveEnable = true;
+                    return;
+                }
+            }
             if (GetIsScanFinished())
             {
                 SetIsScanFinished(false);
@@ -1784,6 +2753,7 @@ namespace UIOperateInterleaverFinalTest
                 CommonFunction.WriteLog("Scan_DoWork begin");
                 scanDetailInfo = (ScanDetail)e.Argument;
                 CurProductIndex = scanDetailInfo.ProductIndex-1;
+                this.Dispatcher.Invoke(new Action(UpdateProductStatuses));
                 scanErrorMsg = "";
                 bool isFstpScan = true;
                 int res = 0;
@@ -2334,6 +3304,17 @@ namespace UIOperateInterleaverFinalTest
         /// <param name="e"></param>
         private void Scan_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
         {
+            if (CurProductIndex >= 0 && CurProductIndex < AllProducts.Count)
+            {
+                if (scanErrorMsg.Length > 0)
+                {
+                    AllProducts[CurProductIndex].HasScanError = true;
+                }
+                else
+                {
+                    AllProducts[CurProductIndex].HasScanError = false;
+                }
+            }
 
             //开始计算，处理PM2数据
             /*string errMsg = "";
@@ -2351,6 +3332,178 @@ namespace UIOperateInterleaverFinalTest
             }
 
             ScanFinish(scanDetailInfo);
+            UpdateProductStatuses();
+        }
+
+        private bool IsMultiSnSinglePortBatch()
+        {
+            return allProductControl.Count > 1 && portAndNameDic.Count == 1;
+        }
+
+        private static bool IsRoomTemperature(double tmpt)
+        {
+            return tmpt >= 20 && tmpt <= 30;
+        }
+
+        /// <summary>
+        /// RtOnlyTest 模式下仅允许常温；否则不限制。
+        /// </summary>
+        private static bool IsTestTemperatureAllowed(double tmpt)
+        {
+            if (!TasRuntimeConfig.IsRtOnlyTestMode())
+                return true;
+            return IsRoomTemperature(tmpt);
+        }
+
+        private static bool IsMaxMinIlParam(string exParamName)
+        {
+            if (string.IsNullOrEmpty(exParamName))
+                return false;
+            string key = exParamName.Split('@')[0].ToUpper();
+            return key == "MAXIL" || key == "MINIL";
+        }
+
+        private bool TryGetRoomTempMaxMinIlFailure(out string message)
+        {
+            message = "";
+            if (!IsRoomTemperature(curTestTmpt))
+                return false;
+
+            for (int p = 0; p < allProductControl.Count; p++)
+            {
+                List<MESTestInfo> infos = allProductControl[p].GetAllTestInfo();
+                string sn = allProductControl[p].ProductSN;
+                for (int i = 0; i < infos.Count; i++)
+                {
+                    MESTestInfo info = infos[i];
+                    if (Math.Abs(info.Temperature - curTestTmpt) > 0.001)
+                        continue;
+                    if (!info.Tested || info.Pass)
+                        continue;
+                    if (!IsMaxMinIlParam(info.ExParamName))
+                        continue;
+                    string[] splits = info.PortNameForUser.Split('_');
+                    if (splits.Length != 1)
+                        continue;
+                    if (info.PortNameForUser.Equals("Frequency Range", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    message = string.Format(
+                        "SN:{0}\r\n端口:{1}\r\n参数:{2}\r\n实测:{3:F3}\r\n限值:[{4}, {5}]",
+                        sn, info.PortNameForUser, info.ExParamName, info.CurValue, info.Criterion, info.Criterion1);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private void AbortBatchTest(string detailMessage)
+        {
+            batchTestAborted = true;
+            batchSnQueue = null;
+            string prompt = "产品批次有问题：常温测试 MAXIL/MINIL 超限，已终止整个测试。";
+            if (!string.IsNullOrEmpty(detailMessage))
+                prompt += "\r\n\r\n" + detailMessage;
+            CommonFunction.WriteLog(prompt);
+            RealtimeMsg(prompt, StatusType.Error);
+            ErrorBox(prompt);
+            UIControl.IsScanEnable = true;
+            UIControl.IsSaveEnable = true;
+            UpdateResIcon();
+            UpdateProductStatuses();
+        }
+
+        private bool TryAbortBatchForRoomTempIl()
+        {
+            if (!IsMultiSnSinglePortBatch() || batchTestAborted)
+                return false;
+            if (!IsRoomTemperature(curTestTmpt))
+                return false;
+            string msg;
+            if (!TryGetRoomTempMaxMinIlFailure(out msg))
+                return false;
+            AbortBatchTest(msg);
+            return true;
+        }
+
+        private bool IsBatchTestAbortedBlocked()
+        {
+            if (!batchTestAborted)
+                return false;
+            WarningBox("产品批次测试已终止（常温 MAXIL/MINIL 超限）。请清空列表或重新点击「一键测试」后再测。");
+            return true;
+        }
+
+        private static int TryReadChamberTemperature(IUDLTCC tcc, out double actual, ref string errMsg)
+        {
+            actual = 0;
+            if (tcc == null)
+            {
+                errMsg = "循环箱未配置或未连接。";
+                return 1;
+            }
+            int res = tcc.GetCurrentTemp(out actual, ref errMsg);
+            if (res != 0)
+            {
+                Thread.Sleep(100);
+                res = tcc.GetCurrentTemp(out actual, ref errMsg);
+            }
+            return res;
+        }
+
+        private bool TryValidateChamberTemperature(double requiredTmpt, out string message)
+        {
+            message = "";
+            string errMsg = "";
+            IUDLTCC tccCtrl = null;
+            DeviceControl.GetUDLTCCByGUID(TCC_GUID, ref tccCtrl, ref errMsg);
+            if (tccCtrl == null)
+            {
+                message = string.IsNullOrEmpty(errMsg)
+                    ? "循环箱未配置或未连接，无法校验温度。"
+                    : "循环箱未配置或未连接：" + errMsg;
+                return false;
+            }
+            double actual;
+            if (TryReadChamberTemperature(tccCtrl, out actual, ref errMsg) != 0)
+            {
+                message = string.Format("读取循环箱温度失败:{0}", errMsg);
+                return false;
+            }
+            if (Math.Abs(actual - requiredTmpt) > TccTempToleranceCelsius)
+            {
+                message = string.Format(
+                    "循环箱温度不符合模板要求，不能测试。\r\n模板要求:{0:F1}°C\r\n当前实测:{1:F1}°C\r\n允许偏差:±{2:F1}°C",
+                    requiredTmpt, actual, TccTempToleranceCelsius);
+                return false;
+            }
+            return true;
+        }
+
+        private bool EnsureChamberReadyForTest(double requiredTmpt, bool restoreOnekeyUiOnFail = false)
+        {
+            if (TasRuntimeConfig.IsTccChamberCheckDisabled())
+            {
+                RealtimeMsg("已跳过循环箱温度校验（set\\DisableTccChamberCheck.txt）");
+                return true;
+            }
+
+            string message;
+            if (TryValidateChamberTemperature(requiredTmpt, out message))
+            {
+                RealtimeMsg(string.Format("循环箱温度校验通过，模板要求 {0:F1}°C", requiredTmpt));
+                return true;
+            }
+            RealtimeMsg(message, StatusType.Error);
+            ErrorBox(message);
+            if (restoreOnekeyUiOnFail)
+            {
+                RealtimeMsg("一键测试结束");
+                UIControl.IsReferenceEnable = true;
+                UIControl.IsScanEnable = true;
+                UIControl.IsSaveEnable = true;
+            }
+            return false;
         }
 
         /// <summary>
@@ -2419,7 +3572,7 @@ namespace UIOperateInterleaverFinalTest
 
                                 for (int n = 0; n < allProductControl[CurProductIndex].AllTestInfo.Count; n++)
                                 {
-                                    if (allProductControl[CurProductIndex].AllTestInfo[n].PortNameForUser == assist.Name && assist.RawdataPath != ""
+                                    if (PortNameMatchesChannel(allProductControl[CurProductIndex].AllTestInfo[n].PortNameForUser, assist.Name) && assist.RawdataPath != ""
                                         && assist.TestTmpt== allProductControl[CurProductIndex].AllTestInfo[n].Temperature&& allProductControl[CurProductIndex].AllTestInfo[n].Tested)
                                     {
                                         allProductControl[CurProductIndex].AllTestInfo[n].Filename = assist.RawdataPath;
@@ -2471,7 +3624,11 @@ namespace UIOperateInterleaverFinalTest
             if(scanInfo.ScanType==SCANTYPE.TestWithPDL)
             {
                 if (scanErrorMsg.Length == 0)
+                {
                     ParamItemUpdate(CurProductIndex);
+                    if (TryAbortBatchForRoomTempIl())
+                        return;
+                }
                 UIControl.IsScanEnable = true;
                 UIControl.IsSaveEnable = true;              
             }
@@ -2481,6 +3638,8 @@ namespace UIOperateInterleaverFinalTest
                 if (scanErrorMsg.Length == 0)
                 {
                     ParamItemUpdate(CurProductIndex);
+                    if (TryAbortBatchForRoomTempIl())
+                        return;
                     OnekeyScan();
                 }
                 else
@@ -2495,7 +3654,7 @@ namespace UIOperateInterleaverFinalTest
             List<MESTestInfo> showInfos = testShowControl[productID].GetAllTestInfo();
             for (int j = 0; j < showInfos.Count; j++)
             {
-                if (showInfos[j].PortNameForUser == assist.Name)
+                if (PortNameMatchesChannel(showInfos[j].PortNameForUser, assist.Name))
                 {
                     testShowControl[productID].UpdateScanRefStatus(j, assist.IsRef);
                     UpdateItem(testShowControl[productID].GetAllTestInfo()[j], productID, j);
@@ -2580,6 +3739,8 @@ namespace UIOperateInterleaverFinalTest
             {
                 AllProducts.Clear();
                 allProductControl.Clear();
+                testShowControl.Clear();
+                SetOpenTemplateComplete(false);
                 ClearListData();
                 TemptRemainTime.Text = "00:00:00";
                 UIControl.SN = "";
@@ -2601,6 +3762,7 @@ namespace UIOperateInterleaverFinalTest
                 WarningBox("请检查模板是否出错!");
                 return;
             }
+            batchTestAborted = false;
             /*foreach(PortAssist assist in portAssistant)
             {                
                 assist.IsTested = false;
@@ -2612,6 +3774,12 @@ namespace UIOperateInterleaverFinalTest
         
         private void OnekeyScan()
         {
+            if (batchTestAborted)
+            {
+                UIControl.IsScanEnable = true;
+                UIControl.IsSaveEnable = true;
+                return;
+            }
             //获取未测试的端口
             scanDetailInfo.Ports.Clear();
             List<int> scanPorts = new List<int>();
@@ -2620,6 +3788,25 @@ namespace UIOperateInterleaverFinalTest
             if (curTestTmpt == -300)
             {
                 scanTmpt = portAssistant[0].TestTmpt;
+                if (TasRuntimeConfig.IsRtOnlyTestMode())
+                {
+                    scanTmpt = -300;
+                    for (int j = 0; j < portAssistant.Count; j++)
+                    {
+                        if (IsRoomTemperature(portAssistant[j].TestTmpt))
+                        {
+                            scanTmpt = portAssistant[j].TestTmpt;
+                            break;
+                        }
+                    }
+                    if (scanTmpt < -299)
+                    {
+                        WarningBox("RtOnlyTest：模板中未找到常温测试项。");
+                        UIControl.IsScanEnable = true;
+                        UIControl.IsSaveEnable = true;
+                        return;
+                    }
+                }
             }
             else
             {
@@ -2628,6 +3815,8 @@ namespace UIOperateInterleaverFinalTest
             //查找当前一键测试该测试哪项
             for (i = 0; i < portAssistant.Count; i++)
             {
+                if (!IsTestTemperatureAllowed(portAssistant[i].TestTmpt))
+                    continue;
                 if ((!portAssistant[i].IsTested) && scanTmpt==portAssistant[i].TestTmpt)
                 {
                     break;
@@ -2638,6 +3827,8 @@ namespace UIOperateInterleaverFinalTest
             {
                 for (i = 0; i < portAssistant.Count; i++)
                 {
+                    if (!IsTestTemperatureAllowed(portAssistant[i].TestTmpt))
+                        continue;
                     if (!portAssistant[i].IsTested)
                     {
                         scanTmpt = portAssistant[i].TestTmpt;
@@ -2648,11 +3839,22 @@ namespace UIOperateInterleaverFinalTest
 
             if (i == portAssistant.Count)
             {
-                //测试完成，恢复按钮状态
-                //常温测试完后，需要继续，知道最后一个温度测试完成才结束
-                //
-                //
-                MessageBox.Show("一键测试完成！");
+                bool rtOnly = TasRuntimeConfig.IsRtOnlyTestMode();
+                bool anyRtPending = false;
+                bool anyNonRtUntested = false;
+                for (int j = 0; j < portAssistant.Count; j++)
+                {
+                    if (portAssistant[j].IsTested)
+                        continue;
+                    if (IsRoomTemperature(portAssistant[j].TestTmpt))
+                        anyRtPending = true;
+                    else
+                        anyNonRtUntested = true;
+                }
+                string completeMsg = "一键测试完成！";
+                if (rtOnly && !anyRtPending && anyNonRtUntested)
+                    completeMsg = "RtOnlyTest：无常温待测项，一键测试结束。（低温/高温项已跳过）";
+                MessageBox.Show(completeMsg);
                 UIControl.IsScanEnable = true;
                 UIControl.IsSaveEnable = true;
                 return;
@@ -2669,15 +3871,23 @@ namespace UIOperateInterleaverFinalTest
             }
             //获取同时扫描的端口号。
             //进光端一样，则可以一起扫描，比如in-to,in-te,in-moni同时扫描
-            string testPortName = "";
-            foreach (PortAssist assist in portAssistant)
+            // Demux Even/Odd 出光路径不同，与归零一致：每次只测当前排队口，不按 ScanIndex 合并。
+            string testPortName = portAssistant[i].Port;
+            scanDetailInfo.Ports.Clear();
+            if (IsDemuxDualPortTemplate())
             {
-                //string[] splits = assist.Name.Split('-');
-                if (productID==assist.ProductIndex&& scanIndex==assist.ScanIndex
-                    && scanTmpt==assist.TestTmpt)
+                scanDetailInfo.Ports.Add(portAssistant[i].PortIndex);
+            }
+            else
+            {
+                foreach (PortAssist assist in portAssistant)
                 {
-                    testPortName = assist.Port;
-                    scanDetailInfo.Ports.Add(assist.PortIndex);
+                    if (productID == assist.ProductIndex && scanIndex == assist.ScanIndex
+                        && scanTmpt == assist.TestTmpt)
+                    {
+                        testPortName = assist.Port;
+                        scanDetailInfo.Ports.Add(assist.PortIndex);
+                    }
                 }
             }
             scanDetailInfo.ProductIndex = productID;
@@ -2687,57 +3897,13 @@ namespace UIOperateInterleaverFinalTest
                 WarningBox(errMsg);
                 return;
             }
-            //切换开关
-            SetSwitch(productID,testPortName);
-            //CurProductIndex = productID;
+            if (!TrySetSwitchBeforeScan(productID, testPortName))
+            {
+                UIControl.IsScanEnable = true;
+                UIControl.IsSaveEnable = true;
+                return;
+            }
 
-            //判断是否需要烤温
-            bool isNeedHeat = false;
-        
-            IUDLTCC tccCtrl = null;
-            DeviceControl.GetUDLTCCByGUID(TCC_GUID, ref tccCtrl, ref errMsg);
-            
-            if (tccCtrl == null)
-            {
-                if (curTestTmpt.CompareTo(-300) == 0)
-                {
-                    if (scanTmpt > 20 && curTestTmpt < 30)
-                    {
-                        isNeedHeat = false;
-                    }
-                    else
-                        isNeedHeat = true;
-                }
-                else if (curTestTmpt.CompareTo(scanTmpt) != 0)
-                {
-                    isNeedHeat = true;
-                }
-            }
-            else
-            {
-                double dTccTemp;
-                int nTccRes=tccCtrl.GetCurrentTemp(out dTccTemp,ref errMsg);
-                if (nTccRes!=0)
-                {
-                    Thread.Sleep(100);
-                    nTccRes = tccCtrl.GetCurrentTemp(out dTccTemp, ref errMsg);
-                    if (nTccRes != 0)
-                    {
-                        string prompt = "";
-                        prompt = string.Format("读取循环箱温度失败:{0}", errMsg);
-                        RealtimeMsg(prompt);
-                        RealtimeMsg("一键测试结束");
-                        UIControl.IsReferenceEnable = true;
-                        UIControl.IsScanEnable = true;
-                        UIControl.IsSaveEnable = true;
-                        return;
-                    }
-                }
-                if (Math.Abs(dTccTemp - scanTmpt) > 5)
-                {
-                    isNeedHeat = true;
-                }
-            }
             scanDetailInfo.ScanType = SCANTYPE.TestWithPDLOnekey;
             UIControl.IsScanEnable = false;
 
@@ -2756,60 +3922,11 @@ namespace UIOperateInterleaverFinalTest
             }
             UpdateItem(testShowControl[productID-1].GetAllTestInfo()[0], productID-1, 0, nextSeleted);
 
-            if (isNeedHeat)
-            {
-                //烤温是否需要增加提示
-                string prompt = "";
-               // string prompt = string.Format("是否进行{0}度烤温", portAssistant[i].TestTmpt);
-                //if (IsAllPass()==true||MessageBox.Show(prompt, "温馨提示", MessageBoxButton.OKCancel) == MessageBoxResult.OK)
-                {
-                   
-                    prompt= string.Format("开始进行{0}度烤温", portAssistant[i].TestTmpt);
-                    RealtimeMsg(prompt);
-                   if (tccCtrl == null)
-                    {
-                        prompt = string.Format("循环箱未连接，请先连接循环箱！");
-                        RealtimeMsg(prompt);
-                        RealtimeMsg("一键测试结束");
-                        UIControl.IsReferenceEnable = true;
-                        UIControl.IsScanEnable = true;
-                        UIControl.IsSaveEnable = true;
-                        return;
-                    }
+            if (!EnsureChamberReadyForTest(scanTmpt, restoreOnekeyUiOnFail: true))
+                return;
 
-                    int nTccRes=tccCtrl.SetTempSetpoint(portAssistant[i].TestTmpt,ref errMsg);
-                    if (nTccRes!=0)
-                    {
-                        nTccRes = tccCtrl.SetTempSetpoint(portAssistant[i].TestTmpt, ref errMsg);
-                        if (nTccRes != 0)
-                        {
-                            prompt = string.Format("循环箱设置温度失败:{0},{1}",portAssistant[i].TestTmpt, errMsg);
-                            RealtimeMsg(prompt);
-                            RealtimeMsg("一键测试结束");
-                            UIControl.IsReferenceEnable = true;
-                            UIControl.IsScanEnable = true;
-                            UIControl.IsSaveEnable = true;
-                            return;
-                        }
-                    }
-                    double tmptChangeTimes = portAssistant[i].TmptChangeTimes;
-                    bakeTimeCheckBK.RunWorkerAsync(tmptChangeTimes * 60);
-                    curTestTmpt = scanTmpt;
-                }
-                /*else
-                {
-                    RealtimeMsg("一键测试结束");
-                    UIControl.IsReferenceEnable = true;
-                    UIControl.IsScanEnable = true;
-                    UIControl.IsSaveEnable = true;
-                    return;
-                }*/
-            }
-            else
-            {
-                curTestTmpt = scanTmpt;
-                DoScanOnBK();
-            }
+            curTestTmpt = scanTmpt;
+            DoScanOnBK();
         }
 
         public void GetUDLMessage(ref string msg, ref bool isSuccess)
@@ -2853,6 +3970,8 @@ namespace UIOperateInterleaverFinalTest
 
         private void btnSingleScan_Click(object sender, RoutedEventArgs e)
         {
+            if (IsBatchTestAbortedBlocked())
+                return;
             RealtimeMsg(string.Format("开始singleScan"));
             if (selectItem!=null&& selectItem.ParamIndex.Count>0)
             {
@@ -2863,125 +3982,71 @@ namespace UIOperateInterleaverFinalTest
                     return;
                 MESTestInfo selectTestItem = showInfos[selectIndex];
               
-                //string[] portNames = selectTestItem.PortNameForUser.Split('-');
                 scanDetailInfo.Ports.Clear();
-                //获取同时扫描的端口号。
-                //进光端一样，则可以一起扫描，比如in-to,in-te,in-moni同时扫描
-                string testPortName = "";
-                int scanIndex = -1;
-                double tmptChangeTimes = 0;
-               
+                PortAssist switchAssist = null;
                 foreach (PortAssist assist in portAssistant)
                 {
-                    if(scanIndex==-1)
-                    {
-                        if(selectTestItem.PortNameForUser == assist.Name)
-                        {
-                            scanIndex = assist.ScanIndex;
-                        }
-                    }
-                    //string[] splits = assist.Name.Split('-');
-                    if ((selectItem.ProductIndex+1) == assist.ProductIndex && scanIndex == assist.ScanIndex
+                    if ((selectItem.ProductIndex + 1) == assist.ProductIndex
+                        && PortNameMatchesChannel(selectTestItem.PortNameForUser, assist.Name)
                         && selectTestItem.Temperature == assist.TestTmpt)
                     {
-                        tmptChangeTimes = assist.TmptChangeTimes;
-                        testPortName = assist.Port;
-                        scanDetailInfo.Ports.Add(assist.PortIndex);
+                        switchAssist = assist;
+                        break;
+                    }
+                }
+                if (switchAssist == null)
+                {
+                    WarningBox("未找到与列表选中项对应的光路端口，请确认模板已打开。");
+                    return;
+                }
+
+                string testPortName = switchAssist.Port;
+                if (IsDemuxDualPortTemplate())
+                {
+                    scanDetailInfo.Ports.Add(switchAssist.PortIndex);
+                }
+                else
+                {
+                    int scanIndex = switchAssist.ScanIndex;
+                    foreach (PortAssist assist in portAssistant)
+                    {
+                        if ((selectItem.ProductIndex + 1) == assist.ProductIndex && scanIndex == assist.ScanIndex
+                            && selectTestItem.Temperature == assist.TestTmpt)
+                        {
+                            scanDetailInfo.Ports.Add(assist.PortIndex);
+                        }
                     }
                 }
 
-              
                 string errMsg = "";
                 if (!IsScanRef(scanDetailInfo.Ports, ref errMsg))
                 {
                     WarningBox(errMsg);
                     return;
                 }
-               
-                //切换开关
-                //SetSwitch(true);
+
                 double testTmpt = selectTestItem.Temperature;
-                RealtimeMsg(string.Format("当前测试温度:{0}",testTmpt));
-                //判断是否需要烤温
-                bool isNeedHeat = false;
-             
-                IUDLTCC tccCtrl = null;
-                DeviceControl.GetUDLTCCByGUID(TCC_GUID, ref tccCtrl, ref errMsg);
-                if (tccCtrl == null)
+                RealtimeMsg(string.Format("当前测试温度:{0}", testTmpt));
+                if (!IsTestTemperatureAllowed(testTmpt))
                 {
-                    RealtimeMsg(string.Format("循环箱未连接"));
-                    if (curTestTmpt.CompareTo(-300) == 0)
-                    {
-                        if (testTmpt > 20 && curTestTmpt < 30)
-                        {
-                            isNeedHeat = false;
-                        }
-                        else
-                            isNeedHeat = true;
-                    }
-                    else if (curTestTmpt.CompareTo(testTmpt) != 0)
-                    {
-                        isNeedHeat = true;
-                    }
+                    WarningBox(string.Format(
+                        "RtOnlyTest 模式仅支持常温测试（约 20~30°C）。\r\n当前项温度:{0:F1}°C\r\n请删除 set\\RtOnlyTest.txt 或改选常温行。",
+                        testTmpt));
+                    return;
                 }
-                else
-                {
-                    double dTccTemp;
-                    int nTccRess=tccCtrl.GetCurrentTemp( out dTccTemp,ref errMsg);
-                    RealtimeMsg(string.Format("读取循环箱温度:{0}", dTccTemp));
-                    if (nTccRess!=0)
-                    {
-                        Thread.Sleep(100);
-                        nTccRess = tccCtrl.GetCurrentTemp(out dTccTemp, ref errMsg);
-                        if (nTccRess != 0)
-                        {
-                            string prompt = "";
-                            prompt = string.Format("读取循环箱温度失败:{0}", errMsg);
-                            RealtimeMsg(prompt);
-                            return;
-                        }
-                    }
-                    if(Math.Abs(dTccTemp- testTmpt)>5)
-                    {
-                        isNeedHeat = true;
-                    }
-                }
-                RealtimeMsg(string.Format("是否需要烤温:{0}", isNeedHeat));
+                if (!EnsureChamberReadyForTest(testTmpt))
+                    return;
+
                 scanDetailInfo.ScanType = SCANTYPE.TestWithPDL;
                 scanDetailInfo.ProductIndex = selectItem.ProductIndex + 1;
                 UIControl.IsScanEnable = false;
-                //需要知道选择的是产品几
-                SetSwitch(scanDetailInfo.ProductIndex, testPortName);
-                curTestTmpt = testTmpt;
-                if (isNeedHeat)
+                if (!TrySetSwitchBeforeScan(scanDetailInfo.ProductIndex, testPortName))
                 {
-                    string prompt = "";
-                   
-                    if (tccCtrl==null)
-                    {                       
-                        prompt = string.Format("循环箱未连接，请先连接循环箱！");
-                        RealtimeMsg(prompt);
-                        return;
-                    }
-                    //烤温是否需要增加提示
-                    prompt = string.Format("开始进行{0}度烤温", testTmpt);
-                    RealtimeMsg(prompt);
-                    int nTccRess = tccCtrl.SetTempSetpoint(testTmpt,ref errMsg);
-                    if (nTccRess!=0)
-                    {
-                        nTccRess = tccCtrl.SetTempSetpoint(testTmpt, ref errMsg);
-                        if (nTccRess != 0)
-                        {
-                            prompt = string.Format("循环箱设置温度失败:{0},{1}", testTmpt, errMsg);
-                            RealtimeMsg(prompt);
-                            return;
-                        }
-                    }
-                    bakeTimeCheckBK.RunWorkerAsync(tmptChangeTimes * 60);
-                    //curTestTmpt = testTmpt;
+                    UIControl.IsScanEnable = true;
+                    return;
                 }
-                else
-                    DoScanOnBK();
+                curTestTmpt = testTmpt;
+                DoScanOnBK();
             }
             //ReleaseCom(deviceEngine);
             //ReleaseCom(tccCtrl);
@@ -3090,6 +4155,7 @@ namespace UIOperateInterleaverFinalTest
                 TemptRemainTime.Text = "00:00:00";
                 allProductControl.Clear();
                 testShowControl.Clear();
+                SetOpenTemplateComplete(false);
                 ClearListData();
                 UIControl.SN = "";
                 UIControl.IsSaveEnable = false;
@@ -3244,10 +4310,99 @@ namespace UIOperateInterleaverFinalTest
        
     }
 
-    public class TestProductInfo
+    public enum ProductTestStatus
     {
+        NotStarted,
+        Ok,
+        Error
+    }
+
+    public class TestProductInfo : INotifyPropertyChanged
+    {
+        private static readonly SolidColorBrush BrushNotStarted = FreezeBrush(176, 176, 176);
+        private static readonly SolidColorBrush BrushOk = FreezeBrush(50, 205, 50);
+        private static readonly SolidColorBrush BrushError = FreezeBrush(255, 0, 0);
+
+        private static SolidColorBrush FreezeBrush(byte r, byte g, byte b)
+        {
+            var br = new SolidColorBrush(Color.FromRgb(r, g, b));
+            br.Freeze();
+            return br;
+        }
+
+        public static Brush BrushFor(ProductTestStatus status)
+        {
+            switch (status)
+            {
+                case ProductTestStatus.Ok:
+                    return BrushOk;
+                case ProductTestStatus.Error:
+                    return BrushError;
+                default:
+                    return BrushNotStarted;
+            }
+        }
+
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        private void NotifyPropertyChanged([CallerMemberName] string propertyName = null)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
         public string SN { get; set; }
         public int Index { get; set; }
+
+        private bool hasScanError;
+        public bool HasScanError
+        {
+            get { return hasScanError; }
+            set
+            {
+                if (hasScanError == value)
+                {
+                    return;
+                }
+                hasScanError = value;
+                NotifyPropertyChanged();
+            }
+        }
+
+        private ProductTestStatus status = ProductTestStatus.NotStarted;
+        public ProductTestStatus Status
+        {
+            get { return status; }
+            set
+            {
+                if (status == value)
+                {
+                    return;
+                }
+                status = value;
+                NotifyPropertyChanged();
+            }
+        }
+
+        private Brush statusBrush = BrushNotStarted;
+        public Brush StatusBrush
+        {
+            get { return statusBrush; }
+            set
+            {
+                if (ReferenceEquals(statusBrush, value))
+                {
+                    return;
+                }
+                statusBrush = value;
+                NotifyPropertyChanged();
+            }
+        }
+
+        public TestProductInfo()
+        {
+            status = ProductTestStatus.NotStarted;
+            statusBrush = BrushNotStarted;
+        }
     }
 
     public class PortAssist
@@ -3279,10 +4434,17 @@ namespace UIOperateInterleaverFinalTest
         public string RawdataPath { get; set; }
 
         public string TmptID { get; set; }
+
+        /// <summary>
+        /// 1×16 光开关输出通道号 (1-16)
+        /// </summary>
+        public int SwitchChannel { get; set; }
+
         public PortAssist()
         {
             Name = "";
             Port = "";
+            SwitchChannel = -1;
             OperateIndex = -1;
             ProductIndex = -1;
             PortIndex = -1;

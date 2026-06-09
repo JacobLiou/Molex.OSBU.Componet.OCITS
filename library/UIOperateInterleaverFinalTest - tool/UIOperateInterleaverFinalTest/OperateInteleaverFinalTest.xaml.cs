@@ -615,16 +615,15 @@ namespace UIOperateInterleaverFinalTest
                 ErrorBox("无工位信息，请检查配置！");
                 return;
             }
-            if(allProductControl.Count>=2&&portAndNameDic.Count==7)
+            if (portAndNameDic.Count > 0)
             {
-                ErrorBox("该工位最多支持测试2个7端口产品！");
-                return;
-            }
-
-            if (allProductControl.Count >= 8 && portAndNameDic.Count == 2)
-            {
-                ErrorBox("该工位最多支持测试8个3端口产品！");
-                return;
+                int maxProducts = OpticalSwitchConfigNames.GetMaxProductsForPortCount(portAndNameDic.Count);
+                if (maxProducts > 0 && allProductControl.Count >= maxProducts)
+                {
+                    ErrorBox(string.Format("该工位最多支持测试{0}个{1}端口产品！",
+                        maxProducts, portAndNameDic.Count));
+                    return;
+                }
             }
             portRawdatas.Clear();
             RealtimeMsg("正在打开模板...");

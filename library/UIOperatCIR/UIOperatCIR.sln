@@ -5,7 +5,7 @@ VisualStudioVersion = 14.0.25420.1
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIOperatCIR", "UIOperatCIR\UIOperatCIR.csproj", "{A5AA1683-4BBC-4D3E-8FDC-0B86EF5D4C85}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MolexUtility", "..\MolexUtility\MolexUtility\MolexUtility.csproj", "{72939F1A-9914-460F-9296-1B8097D5995A}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MolexUtility", "..\MolexUtility\MolexUtility.csproj", "{72939F1A-9914-460F-9296-1B8097D5995A}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UIListSingleParam", "..\UIListSingleParam\UIListSingleParam.csproj", "{B2D79DB6-2486-4DF7-8DC2-808546B5DB8C}"
 EndProject

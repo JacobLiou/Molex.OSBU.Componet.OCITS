@@ -146,6 +146,7 @@ namespace DeviceControl
                 List<string> useNameList;
                 //读取当前配置设备的配置文件
                 ConfigXmlParser.ParseConfig(System.Environment.CurrentDirectory + "\\set\\Deviceconfig.xml", out useNameList, out usedDeviceConfigs);
+                OpticalSwitchConfigNames.NormalizeMplusSwitchShowName(usedDeviceConfigs);
                 if (usedDeviceConfigs == null)
                 {
                     errMsg = "设备初始化 error:" + "未配置任何设备" + "\r";
@@ -229,6 +230,26 @@ namespace DeviceControl
                             SwitchOMS oplinkSwitch = new SwitchOMS(config.Control[0], config.Control[1], config.ShowName, ref err);
                             if (err.Length == 0)
                                 opticalSwitchs.Add(oplinkSwitch);
+                            else
+                            {
+                                errMsg += err;
+                                MolexUtility.CommonFunction.WriteLog(string.Format("err:{0}", err));
+
+                            }
+                        }
+                        else if (config.ControlName == Devices.MPLUSSwitch.GetAdditional())
+                        {
+                            string err = "";
+                            string switchCmdFile = Path.Combine(Environment.CurrentDirectory, "switch",
+                                OpticalSwitchConfigNames.SanitizeMplusSwitchShowName(config.ShowName));
+                            if (!File.Exists(switchCmdFile))
+                            {
+                                errMsg += string.Format("光源盒 {0}: 指令配置文件不存在 {1}\r", config.ShowName, switchCmdFile);
+                                MolexUtility.CommonFunction.WriteLog(string.Format("MPLUS switch cmd file missing: {0}", switchCmdFile));
+                            }
+                            SwitchMPLUS mplusSwitch = new SwitchMPLUS(config.Control[0], config.Control[1], config.ShowName, ref err);
+                            if (err.Length == 0)
+                                opticalSwitchs.Add(mplusSwitch);
                             else
                             {
                                 errMsg += err;
@@ -629,7 +650,14 @@ namespace DeviceControl
                 }
                 else
                 {
-                    desSwitch = opticalSwitchs[0];
+                    int index = idx - 1;
+                    if (index < 0 || index >= opticalSwitchs.Count)
+                    {
+                        desSwitch = null;
+                        errMsg += "光源盒 " + idx + ": 该光源盒不存在";
+                        return 1;
+                    }
+                    desSwitch = opticalSwitchs[index];
                     return 0;
                 }
             }

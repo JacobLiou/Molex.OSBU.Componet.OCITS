@@ -74,8 +74,8 @@ namespace DeviceControl
                 baseSwitchEvent = new AutoResetEvent(false);
                 int baudrateInt = 0;
                 Int32.TryParse(baudrate, out baudrateInt);
-                SwitchName = switchName;
-                SwitchPath += SwitchName;
+                SwitchName = OpticalSwitchConfigNames.SanitizeMplusSwitchShowName(switchName);
+                SwitchPath = Path.Combine(Environment.CurrentDirectory, "switch", SwitchName);
                 BaseSession = new SerialDotNet(com, baudrateInt, ref errMsg, 100, true);
                 BaseSession.ThreadReadEvent += BaseSwitch_ThreadReadEvent;
                 return 0;
@@ -167,23 +167,46 @@ namespace DeviceControl
             try
             {
                 allCommand.Clear();
-                string[] flagArr = flag.Split(':', '：');
+                string flagKey = NormalizeSwitchFlag(flag);
+                if (string.IsNullOrEmpty(flagKey))
+                {
+                    errMsg += "光源盒 error：切换标志为空\r";
+                    return 1;
+                }
                 if (!File.Exists(SwitchPath))
                 {
                     errMsg += System.Reflection.MethodBase.GetCurrentMethod().DeclaringType.FullName + "."
                     + System.Reflection.MethodBase.GetCurrentMethod().Name + " error:光源盒指令配置文件不存在!\r";
                     return 2;
                 }
-                 StreamReader sr = new StreamReader(SwitchPath, Encoding.UTF8);
-                string readLine = sr.ReadLine();
-                while (readLine != null && readLine != "")
+                using (StreamReader sr = new StreamReader(SwitchPath, Encoding.UTF8))
                 {
-                    //文件命令格式，是char还是16进制
-                    if (readLine.Substring(0, 1) == "[")
-                        GetAllCommand(flagArr, readLine, ref errMsg);
-                    readLine = sr.ReadLine();
+                    string readLine;
+                    while ((readLine = sr.ReadLine()) != null)
+                    {
+                        readLine = TrimSwitchLine(readLine);
+                        if (readLine.Length == 0)
+                            continue;
+                        if (!TryParseBracketFlag(readLine, out string bracketFlag))
+                            continue;
+                        if (!FlagEquals(flagKey, bracketFlag))
+                            continue;
+
+                        CommandStruct temp;
+                        temp.com = bracketFlag;
+                        temp.cmdList = new List<string>();
+                        int err = GetCmdList(bracketFlag, ref temp.cmdList, ref errMsg);
+                        if (err != 0)
+                            return err;
+                        temp.priority = CountFlagSegments(bracketFlag);
+                        allCommand.Add(temp);
+                    }
                 }
-                sr.Close();
+                if (allCommand.Count == 0)
+                {
+                    errMsg += "光源盒 error：指令配置文件中未找到匹配 flag=" + flagKey + "，文件:" + SwitchPath + "\r";
+                    return 2;
+                }
                 cmdList = allCommand[0].cmdList;
                 int maxPriority = allCommand[0].priority;
                 for (int i = 1; i < allCommand.Count; i++)
@@ -194,6 +217,11 @@ namespace DeviceControl
                         maxPriority = allCommand[i].priority;
                     }
                 }
+                if (cmdList == null || cmdList.Count == 0)
+                {
+                    errMsg += "光源盒 error：flag=" + flagKey + " 未配置 MSW 指令，文件:" + SwitchPath + "\r";
+                    return 2;
+                }
                 CheckSum(ref cmdList, ref errMsg);
                 return 0;
             }
@@ -202,6 +230,47 @@ namespace DeviceControl
                 errMsg += "光源盒 error:" + ex.Message + "\r";
                 return 1;
             }
+        }
+
+        private static string TrimSwitchLine(string line)
+        {
+            if (line == null)
+                return "";
+            return line.Trim().Trim('\uFEFF', '\r', '\n');
+        }
+
+        private static string NormalizeSwitchFlag(string flag)
+        {
+            return TrimSwitchLine(flag);
+        }
+
+        private static bool TryParseBracketFlag(string line, out string innerFlag)
+        {
+            innerFlag = "";
+            line = TrimSwitchLine(line);
+            if (line.Length < 3 || line[0] != '[' || line[line.Length - 1] != ']')
+                return false;
+            innerFlag = line.Substring(1, line.Length - 2).Trim();
+            return innerFlag.Length > 0;
+        }
+
+        private static bool FlagEquals(string flag, string bracketInner)
+        {
+            return string.Equals(NormalizeSwitchFlag(flag), NormalizeSwitchFlag(bracketInner),
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static int CountFlagSegments(string flag)
+        {
+            if (string.IsNullOrEmpty(flag))
+                return 0;
+            int count = 0;
+            foreach (string part in flag.Split(':', '：'))
+            {
+                if (!string.IsNullOrEmpty(part))
+                    count++;
+            }
+            return count;
         }
 
         /// <summary>
@@ -257,32 +326,38 @@ namespace DeviceControl
         {
             try
             {
+                string targetFlag = NormalizeSwitchFlag(readLine);
                 if (!File.Exists(SwitchPath))
                 {
                     errMsg += System.Reflection.MethodBase.GetCurrentMethod().DeclaringType.FullName + "."
                     + System.Reflection.MethodBase.GetCurrentMethod().Name + " error:光源盒指令配置文件不存在!\r";
                     return 2;
                 }
-                StreamReader sr = new StreamReader(SwitchPath, Encoding.UTF8);
-                string line = sr.ReadLine();
-                while (line != null && line != "")
+                using (StreamReader sr = new StreamReader(SwitchPath, Encoding.UTF8))
                 {
-                    if (line.Substring(1, line.Length - 2) == readLine)
+                    string line;
+                    while ((line = sr.ReadLine()) != null)
                     {
-                        while (line != null && line != "")
+                        line = TrimSwitchLine(line);
+                        if (line.Length == 0)
+                            continue;
+                        if (!TryParseBracketFlag(line, out string bracketFlag))
+                            continue;
+                        if (!FlagEquals(targetFlag, bracketFlag))
+                            continue;
+
+                        while ((line = sr.ReadLine()) != null)
                         {
-                            line = sr.ReadLine();
-                            {
-                                if (line == null||line.Substring(0, 1) == "[")
-                                    break;
-                            }
+                            line = TrimSwitchLine(line);
+                            if (line.Length == 0)
+                                continue;
+                            if (line[0] == '[')
+                                break;
                             cmdList.Add(line);
                         }
                         break;
                     }
-                    line = sr.ReadLine();
                 }
-                sr.Close();
                 return 0;
             }
             catch (Exception ex)

@@ -72,11 +72,13 @@ namespace ConfigModel
 
                 //读取记录所有类型设备的配置文件
                 ConfigXmlParser.ParseConfig(System.Environment.CurrentDirectory + "\\set\\AllDevice.xml", out deviceNameList, out allDeviceConfig);
+                DeviceCatalogHelper.EnsureMplusSwitchInCatalog(deviceNameList, allDeviceConfig);
                 List<string> useNameList;
                 //List<List<DeviceConfig>> useDevice;
                 
                 //读取当前配置设备的配置文件
                 ConfigXmlParser.ParseConfig(deviceConfigPath, out useNameList, out allConfigInfo);
+                DeviceCatalogHelper.NormalizeMplusSwitchShowName(allConfigInfo);
                 if (allDeviceConfig == null)
                     return;
 

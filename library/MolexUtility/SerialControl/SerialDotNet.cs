@@ -22,10 +22,34 @@ namespace MolexUtility.SerialControl
 {
     public class SerialDotNet:ISerial
     {
+        private static readonly object s_registryLock = new object();
+        private static readonly Dictionary<string, SerialDotNet> s_openPorts =
+            new Dictionary<string, SerialDotNet>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// 获取本进程内已打开的串口会话（如主程序 InitDevice 已 Open），避免重复 Open 导致 Access denied。
+        /// </summary>
+        public static ISerial TryGetOpenPort(string portName)
+        {
+            if (string.IsNullOrWhiteSpace(portName))
+                return null;
+            lock (s_registryLock)
+            {
+                SerialDotNet existing;
+                if (s_openPorts.TryGetValue(portName.Trim(), out existing) &&
+                    existing.serialSession != null &&
+                    existing.serialSession.IsOpen)
+                    return existing;
+            }
+            return null;
+        }
+
         /// <summary>
         /// 串口操作对象
         /// </summary>
         private SerialPort serialSession = null;
+
+        private string portName = "";
 
         /// <summary>
         /// 线程读取数据事件
@@ -90,12 +114,29 @@ namespace MolexUtility.SerialControl
                     isEndThreadRead = false;
                     serialSession.DataReceived += SerialSession_DataReceived;
                 }
+                portName = sourceName;
+                lock (s_registryLock)
+                {
+                    s_openPorts[portName] = this;
+                }
                 return 0;
             }
             catch (Exception ex)
             {
                 errMsg += "打开串口:"+ sourceName + " 出错:" + ex.Message + "\r";
                 return 1;
+            }
+        }
+
+        private void UnregisterPort()
+        {
+            if (string.IsNullOrEmpty(portName))
+                return;
+            lock (s_registryLock)
+            {
+                SerialDotNet registered;
+                if (s_openPorts.TryGetValue(portName, out registered) && registered == this)
+                    s_openPorts.Remove(portName);
             }
         }
 
@@ -357,6 +398,7 @@ namespace MolexUtility.SerialControl
         public void Close()
         {
             isEndThreadRead = true;
+            UnregisterPort();
             if (serialSession != null && serialSession.IsOpen)
             {
                 serialSession.Close();

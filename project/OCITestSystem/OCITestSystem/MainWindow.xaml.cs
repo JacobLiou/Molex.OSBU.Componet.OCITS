@@ -121,11 +121,15 @@ namespace OCITestSystem
             if(allStations.Count>0&& allStations[0].Stations.Count>0)
             {
                 Environment.CurrentDirectory = GetExeDir();
-                stationType = allStations[0].Stations[0].Name;
-                mainInfo.AutomationType = Convert.ToInt32(allStations[0].Stations[0].Automation);
+                SingleStationConfig activeStation = GetSelectedStationConfig();
+                if (activeStation == null)
+                    activeStation = allStations[0].Stations[0];
+                stationType = activeStation.Name;
+                mainInfo.AutomationType = Convert.ToInt32(activeStation.Automation);
                 string fileName = GetExeDir() + "\\Module\\Module_" + stationType + ".xml";
-                string mainDllPath = GetExeDir() +"\\"+ allStations[0].Stations[0].MainDllPath;
-                mainInfo.Goldsample = allStations[0].Stations[0].Goldsample;
+                string mainDllPath = GetExeDir() +"\\"+ activeStation.MainDllPath;
+                mainInfo.Goldsample = activeStation.Goldsample;
+                ApplyTestProcessFromStationsXml();
                 LayoutXMLParser.ParseSoftIDAndVersion(fileName, ref softwareID, ref softwareVersion, ref softwareName,ref useUDL);
                 if (stationType.Length > 0)
                 {
@@ -191,8 +195,53 @@ namespace OCITestSystem
             }
         }
 
+        private SingleStationConfig GetSelectedStationConfig()
+        {
+            if (allStations == null)
+                return null;
+            foreach (StationShowConfig line in allStations)
+            {
+                foreach (SingleStationConfig station in line.Stations)
+                {
+                    if (station.IsSelected)
+                        return station;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 从 set\stations.xml 中已选工位的 TestProcess 覆盖 MIMS 传入工序（ITL_FTS 应配置为 Interleaver-ITL-终测）。
+        /// </summary>
+        private void ApplyTestProcessFromStationsXml()
+        {
+            if (allStations == null || allStations.Count == 0)
+                return;
+            foreach (StationShowConfig line in allStations)
+            {
+                foreach (SingleStationConfig station in line.Stations)
+                {
+                    if (!station.IsSelected || string.IsNullOrWhiteSpace(station.TestProcess))
+                        continue;
+                    if (string.IsNullOrEmpty(stationType) ||
+                        string.Equals(station.Name, stationType, StringComparison.OrdinalIgnoreCase))
+                    {
+                        mainInfo.TestProcess = station.TestProcess.Trim();
+                        return;
+                    }
+                }
+            }
+        }
+
         private void ParserCmdArgs(string args)
         {
+            if (string.IsNullOrWhiteSpace(args))
+                return;
+            if (!args.TrimStart().StartsWith("<", StringComparison.Ordinal))
+            {
+                TryParseSemicolonStationArgs(args);
+                return;
+            }
             try
             {
                 XmlDocument doc = new XmlDocument();
@@ -242,8 +291,26 @@ namespace OCITestSystem
             }
             catch(Exception ex)
             {
-                MessageBox.Show(ex.Message);
+                TryParseSemicolonStationArgs(args);
             }
+        }
+
+        /// <summary>
+        /// 登录界面传入：产线;工位类型;ID;模板类型;工序;UserID;Goldsample
+        /// </summary>
+        private void TryParseSemicolonStationArgs(string args)
+        {
+            string[] splits = args.Split(';');
+            if (splits.Length < 7)
+                return;
+            mainInfo.ProductLine = splits[0];
+            mainInfo.StationType = splits[1];
+            mainInfo.StationID = splits[2];
+            mainInfo.TemplateType = splits[3];
+            mainInfo.TestProcess = splits[4];
+            mainInfo.UserID = splits[5];
+            mainInfo.Goldsample = splits[6];
+            stationType = mainInfo.StationType;
         }
 
         /// <summary>

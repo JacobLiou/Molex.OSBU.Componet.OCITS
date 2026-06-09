@@ -9,6 +9,11 @@ namespace ConfigModel
 {
     public class ConfigXmlParser
     {
+        /// <summary>
+        /// 与 XML 声明 gb2312 及产线历史配置一致（简体中文 Windows 代码页 936）
+        /// </summary>
+        private static readonly Encoding ConfigFileEncoding = Encoding.GetEncoding(936);
+
         public static void ParseConfig(string path,out List<string> deviceNameList,out List<List<DeviceConfig>> allDevice)
         {
             deviceNameList = null;
@@ -16,7 +21,7 @@ namespace ConfigModel
             FileInfo configFileInfo = new FileInfo(path);
             if (configFileInfo.Exists == false)
                 return;
-            string xmlString = File.ReadAllText(path);
+            string xmlString = ReadConfigText(path);
             XmlDocument doc = new XmlDocument();
             doc.LoadXml(xmlString);
             //doc.Load(xmlString);
@@ -83,9 +88,16 @@ namespace ConfigModel
                     AddNode(doc, subNode, allConfig[i]);
                 }
             }
-            string saveXml = doc.InnerXml; 
-            File.WriteAllText(path, saveXml,Encoding.UTF8);
-            //doc.Save(path);
+            string saveXml = doc.InnerXml;
+            File.WriteAllText(path, saveXml, ConfigFileEncoding);
+        }
+
+        private static string ReadConfigText(string path)
+        {
+            byte[] bytes = File.ReadAllBytes(path);
+            if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+                return Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3);
+            return ConfigFileEncoding.GetString(bytes);
         }
 
         private static void AddNode(XmlDocument xmlDoc,XmlNode parentNode, List<DeviceConfig> configList)
@@ -93,6 +105,12 @@ namespace ConfigModel
             foreach(DeviceConfig config in configList)
             {
                 XmlNode node = xmlDoc.CreateElement("Device");
+                if (!string.IsNullOrEmpty(config.ShowName))
+                {
+                    XmlAttribute nameAttr = xmlDoc.CreateAttribute("name");
+                    nameAttr.InnerText = config.ShowName;
+                    node.Attributes.Append(nameAttr);
+                }
                 parentNode.AppendChild(node);
                 if (config.ControlName != "")
                 {
@@ -101,6 +119,10 @@ namespace ConfigModel
                 if(config.ChannelCount!="")
                 {
                     CreateNode(xmlDoc, node, "channel", config.ChannelCount,"");
+                }
+                if (!string.IsNullOrEmpty(config.CheckCmd))
+                {
+                    CreateNode(xmlDoc, node, "check", config.CheckCmd, "");
                 }
                 for (int i = 0; i < config.ControlMaxCount; i++)
                 {

@@ -12,7 +12,10 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
+using System.Threading;
 using MolexUtility.Device;
+using MolexUtility.SerialControl;
+using MolexUtility;
 //using Ivi.Visa;
 
 namespace ConfigModel
@@ -208,8 +211,162 @@ namespace ConfigModel
         /// <param name="e"></param>
         private void SendTest_Click(object sender, RoutedEventArgs e)
         {
-            //int i = 0;
-            
+            ISerial port = null;
+            bool closeAfterTest = false;
+            bool pausedBackgroundRead = false;
+            string errMsg = "";
+            selectDevice.AckData = "";
+            try
+            {
+                string com = (selectDevice.Control[0] ?? "").Trim();
+                if (string.IsNullOrEmpty(com))
+                {
+                    MessageBox.Show("请先选择 COM 口。", "设备测试", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                int baud = 9600;
+                int.TryParse((selectDevice.Control[1] ?? "").Trim(), out baud);
+                if (baud <= 0)
+                    baud = 9600;
+
+                string cmd = (selectDevice.CheckCmd ?? "").Trim();
+                if (string.IsNullOrEmpty(cmd))
+                {
+                    cmd = GetDefaultCheckCmd(selectDevice.ControlName, selectDevice.ShowName);
+                    if (string.IsNullOrEmpty(cmd))
+                    {
+                        MessageBox.Show("请在「确定命令」中填写测试指令后再测试。", "设备测试", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        return;
+                    }
+                }
+
+                port = SerialDotNet.TryGetOpenPort(com);
+                bool reusedOpenPort = port != null;
+                if (!reusedOpenPort)
+                {
+                    port = new SerialDotNet(com, baud, ref errMsg, 3000, false);
+                    if (!string.IsNullOrEmpty(errMsg))
+                    {
+                        selectDevice.AckData = errMsg.Trim();
+                        RefreshConfigGrid();
+                        return;
+                    }
+                    closeAfterTest = true;
+                }
+                else
+                {
+                    // 主程序光开关已挂 DataReceived，须先暂停事件读再同步写读（见 ISerial 注释）
+                    port.SetEndThreadRead();
+                    pausedBackgroundRead = true;
+                }
+
+                string payload = FormatTestCommand(selectDevice.ControlName, cmd);
+                if (port.WriteSerialString(payload, ref errMsg) != 0)
+                {
+                    selectDevice.AckData = errMsg.Trim();
+                    RefreshConfigGrid();
+                    return;
+                }
+
+                string reply = ReadTestResponse(port, selectDevice.ControlName, ref errMsg);
+                if (!string.IsNullOrEmpty(errMsg) && string.IsNullOrEmpty(reply))
+                    selectDevice.AckData = errMsg.Trim();
+                else if (string.IsNullOrWhiteSpace(reply))
+                    selectDevice.AckData = reusedOpenPort
+                        ? "(无回复；已复用主程序打开的串口，请检查确定命令)"
+                        : "(无回复，请检查 COM/波特率/确定命令)";
+                else
+                    selectDevice.AckData = reusedOpenPort
+                        ? "[复用已打开串口] " + reply.Trim()
+                        : reply.Trim();
+
+                RefreshConfigGrid();
+            }
+            catch (Exception ex)
+            {
+                selectDevice.AckData = ex.Message;
+                RefreshConfigGrid();
+            }
+            finally
+            {
+                if (port != null && pausedBackgroundRead)
+                    port.StartThreadRead();
+                if (closeAfterTest && port != null)
+                    port.Close();
+            }
+        }
+
+        private void RefreshConfigGrid()
+        {
+            configInfo.ItemsSource = null;
+            configInfo.ItemsSource = itemSelect;
+        }
+
+        private static string GetDefaultCheckCmd(string controlName, string showName)
+        {
+            if (controlName == Devices.MPLUSSwitch.GetAdditional())
+            {
+                if (OpticalSwitchConfigNames.InterleaverMplus1X32Out.Equals(
+                        OpticalSwitchConfigNames.SanitizeMplusSwitchShowName(showName),
+                        StringComparison.OrdinalIgnoreCase))
+                    return "MSW 1,1,2;9,1,1;";
+                return "MSW 1,1,2;9,1,1;";
+            }
+            if (controlName == Devices.OMSSwitch.GetAdditional())
+                return "*IDN?";
+            return "";
+        }
+
+        private static string FormatTestCommand(string controlName, string cmd)
+        {
+            if (controlName == Devices.MPLUSSwitch.GetAdditional() ||
+                controlName == Devices.OMSSwitch.GetAdditional())
+            {
+                if (!cmd.EndsWith("\r\n", StringComparison.Ordinal) && !cmd.EndsWith("\r", StringComparison.Ordinal))
+                    return cmd + "\r\n";
+            }
+            else if (controlName == Devices.Min1X8Switch.GetAdditional() ||
+                     controlName == Devices.PboxSwitch.GetAdditional())
+            {
+                if (!cmd.EndsWith("\r", StringComparison.Ordinal))
+                    return cmd + "\r";
+            }
+            return cmd;
+        }
+
+        private static string ReadTestResponse(ISerial port, string controlName, ref string errMsg)
+        {
+            if (controlName == Devices.MPLUSSwitch.GetAdditional())
+                Thread.Sleep(150);
+
+            var sb = new StringBuilder();
+            DateTime deadline = DateTime.UtcNow.AddSeconds(3);
+            while (DateTime.UtcNow < deadline)
+            {
+                string chunk;
+                if (port.ReadSerialString(out chunk, ref errMsg) == 0 && !string.IsNullOrEmpty(chunk))
+                    sb.Append(chunk);
+
+                string buffered = sb.ToString();
+                if (controlName == Devices.MPLUSSwitch.GetAdditional())
+                {
+                    if (buffered.IndexOf('>') >= 0 ||
+                        buffered.IndexOf("OK", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        buffered.IndexOf("Err:", StringComparison.OrdinalIgnoreCase) >= 0)
+                        break;
+                }
+                else if (controlName == Devices.OMSSwitch.GetAdditional())
+                {
+                    if (buffered.IndexOf("OK", StringComparison.OrdinalIgnoreCase) >= 0)
+                        break;
+                }
+                else if (!string.IsNullOrEmpty(chunk))
+                    break;
+
+                Thread.Sleep(50);
+            }
+            return sb.ToString();
         }
     }
 

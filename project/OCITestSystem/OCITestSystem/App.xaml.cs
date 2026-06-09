@@ -77,7 +77,7 @@ namespace OCITestSystem
                     }
                 }*/
                 //rjf test
-                string testArg = "<MIMS>\r\n<AppInfo Type = \"ProgInfo\">\r\n<User>24351</User>\r\n<PN>1831760177</PN>\r\n<SN>CFOIC0001</SN>\r\n<Process>Interleaver-ITL-终测CD</Process>\r\n<LoginMode>RDModule</LoginMode>\r\n<SoftwareID>NA</SoftwareID>\r\n<MesMode>MESOnline</MesMode>\r\n<CheckUser>9353</CheckUser>\r\n<CheckPwd>AF3F3335190E8D197A020F41360EBA5B</CheckPwd>\r\n</AppInfo>\r\n</MIMS>\r\n";
+                string testArg = "<MIMS>\r\n<AppInfo Type = \"ProgInfo\">\r\n<User>24351</User>\r\n<PN>1831760177</PN>\r\n<SN>CFOIC0001</SN>\r\n<Process>Interleaver-ITL-终测</Process>\r\n<LoginMode>RDModule</LoginMode>\r\n<SoftwareID>NA</SoftwareID>\r\n<MesMode>MESOnline</MesMode>\r\n<CheckUser>9353</CheckUser>\r\n<CheckPwd>AF3F3335190E8D197A020F41360EBA5B</CheckPwd>\r\n</AppInfo>\r\n</MIMS>\r\n";
                 //MessageBox.Show(testArg);
                 MainWindow mainWindow = new OCITestSystem.MainWindow(testArg);
                 mainWindow.Show();
