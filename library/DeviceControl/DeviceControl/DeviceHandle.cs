@@ -11,6 +11,7 @@ using System.IO;
 namespace DeviceControl
 {
     [Export(typeof(IDeviceHandle))]
+    [PartCreationPolicy(CreationPolicy.Shared)]
     public class DeviceHandle: IDeviceHandle
     {
         /// <summary>
@@ -62,20 +63,25 @@ namespace DeviceControl
         public static UDL2_FSTP fstpCtrl = null;
         public static UDL2_OSW oswCtrl = null;
 
+        private static void EnsureDeviceLists()
+        {
+            if (powermeters == null) powermeters = new List<IPowermeter>();
+            if (opticalSwitchs == null) opticalSwitchs = new List<IOpticalSwitch>();
+            if (currents == null) currents = new List<ICurrent>();
+            if (opticalSources == null) opticalSources = new List<IOpticalSource>();
+            if (interleaverScans == null) interleaverScans = new List<IInterleaverScan>();
+            if (automations == null) automations = new List<IAutomation>();
+            if (pdlControllers == null) pdlControllers = new List<IPDLController>();
+            if (cdScans == null) cdScans = new List<ICDScan>();
+            if (fstpScans == null) fstpScans = new List<IFSTPScan>();
+            if (udlSwitchs == null) udlSwitchs = new List<IUDLSwitch>();
+            if (udlFstps == null) udlFstps = new List<IUDLFSTP>();
+            if (udlTccs == null) udlTccs = new List<IUDLTCC>();
+        }
+
         public DeviceHandle()
         {
-            powermeters = new List<IPowermeter>();
-            opticalSwitchs = new List<IOpticalSwitch>();
-            currents = new List<ICurrent>();
-            opticalSources = new List<IOpticalSource>();
-            interleaverScans = new List<IInterleaverScan>();
-            automations = new List<IAutomation>();
-            pdlControllers = new List<IPDLController>();
-            cdScans = new List<ICDScan>();
-            fstpScans = new List<IFSTPScan>();
-            udlSwitchs = new List<IUDLSwitch>();
-            udlFstps = new List<IUDLFSTP>();
-            udlTccs = new List<IUDLTCC>();
+            EnsureDeviceLists();
         }
 
         public static bool GetUDLMessage(ref string msg)
@@ -120,6 +126,7 @@ namespace DeviceControl
         {
             try
             {
+                EnsureDeviceLists();
                 string udlConfigPath = Environment.CurrentDirectory + "\\set\\UDLConfig.xml";
                 if (!UdlRuntimeConfig.IsUdlEngineLoadDisabled() && File.Exists(udlConfigPath))
                 {                  
@@ -602,6 +609,7 @@ namespace DeviceControl
         {
             try
             {
+                EnsureDeviceLists();
                 if (opticalSwitchs.Count == 0)
                 {
                     desSwitch = null;
@@ -612,7 +620,8 @@ namespace DeviceControl
                 {
                     foreach (IOpticalSwitch optical in opticalSwitchs)
                     {
-                        if(type==null||type.Length==0|| optical.SwitchName == type)
+                        if (type == null || type.Length == 0 ||
+                            string.Equals(optical.SwitchName, type, StringComparison.OrdinalIgnoreCase))
                         {
                             desSwitch = optical;
                             return 0;

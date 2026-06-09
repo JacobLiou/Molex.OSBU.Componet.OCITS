@@ -16,7 +16,6 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.ComponentModel;
 using System.ComponentModel.Composition;
-using System.ComponentModel.Composition.Hosting;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -94,6 +93,12 @@ namespace UIOperateInterleaverFinalTest
 
         /// <summary>TAS 打开模板 STA 线程最长等待（毫秒）</summary>
         private const int OpenTemplateStaTimeoutMs = 180000;
+
+        /// <summary>TAS 上传数据 STA 线程最长等待（毫秒）</summary>
+        private const int UploadStaTimeoutMs = 180000;
+
+        /// <summary>正在上传测试数据（防重复点击）</summary>
+        private bool uploadInProgress = false;
 
         /// <summary>
         /// 是否正在烤温
@@ -529,13 +534,6 @@ namespace UIOperateInterleaverFinalTest
             }
         }
 
-        private void Compose()
-        {
-            var catalog = new DirectoryCatalog(Environment.CurrentDirectory + "\\module");
-            CompositionContainer container = new CompositionContainer(catalog);
-            container.ComposeParts(this);
-        }
-
         /// <summary>
         /// 与插件通信，将传进的模板信息进行显示
         /// </summary>
@@ -663,7 +661,7 @@ namespace UIOperateInterleaverFinalTest
 
         private void UserControl_Loaded(object sender, RoutedEventArgs e)
         {
-            Compose();
+            // 依赖由主程序 MEF 容器注入；勿在此重复 DirectoryCatalog.Compose，否则会加载第二份 DeviceControl 导致光开关列表为空。
             InitRegerster();
             SelectedItemChangeRegister();
         }
@@ -4091,85 +4089,255 @@ namespace UIOperateInterleaverFinalTest
             }
         }
 
+        private sealed class UploadWorkArgs
+        {
+            public string SavePathBase;
+            public string LoginMode;
+            public List<FusionControl> Products;
+            public List<string> SavePathList;
+        }
+
+        private sealed class UploadWorkResult
+        {
+            public bool Success;
+            public string ErrorMessage = "";
+        }
+
         private void btnSaveToAMTS_Click(object sender, RoutedEventArgs e)
         {
-            string errMsg = "";
-            bool isSaveError = false;
-            for(int i=0;i<allProductControl.Count;i++)
+            if (uploadInProgress)
             {
-                List<AMTSRawdata> rawdatas = new List<AMTSRawdata>();
-                for(int j=0;j<portAssistant.Count;j++)
-                {
-                    if(portAssistant[j].ProductIndex==(i+1))
-                    {
-                        AMTSRawdata data = new AMTSRawdata();
-                        data.PortName = portAssistant[j].Name;
-                        data.Temperature = portAssistant[j].TestTmpt;
-                        data.Rawdata = portAssistant[j].Rawdata;
-                        rawdatas.Add(data);
-                    }
-                }
-                string snPath = allProductControl[i].GetSNDir(savePathBase, ref scanErrorMsg);
+                RealtimeMsg("正在上传数据，请稍候…");
+                return;
+            }
+            if (allProductControl == null || allProductControl.Count == 0)
+            {
+                WarningBox("无待上传产品，请先打开模板并完成测试。");
+                return;
+            }
+            if (savePathList == null || savePathList.Count == 0)
+            {
+                WarningBox("无待上传的测试结果文件（savePathList 为空），请先完成扫描。");
+                return;
+            }
 
-                for (int j = 0; j < savePathList.Count; j++)
+            uploadInProgress = true;
+            UIControl.IsSaveEnable = false;
+            UIControl.IsScanEnable = false;
+            RealtimeMsg("正在上传数据，请稍候…");
+            CommonFunction.WriteLog("[Upload] btnSaveToAMTS_Click begin, productCount=" + allProductControl.Count);
+
+            var workArgs = new UploadWorkArgs
+            {
+                SavePathBase = savePathBase,
+                LoginMode = mainInfo != null ? mainInfo.LoginMode : "",
+                Products = new List<FusionControl>(allProductControl),
+                SavePathList = new List<string>(savePathList)
+            };
+
+            var uploadBk = new BackgroundWorker();
+            uploadBk.DoWork += UploadBK_DoWork;
+            uploadBk.RunWorkerCompleted += UploadBK_RunWorkerCompleted;
+            uploadBk.RunWorkerAsync(workArgs);
+        }
+
+        /// <summary>
+        /// 在 STA 线程执行上传（TAS / 网络共享），避免 UI 卡死及 MTA 调用 TAS 异常。
+        /// </summary>
+        private UploadWorkResult DoUploadOnStaThread(UploadWorkArgs args)
+        {
+            var result = new UploadWorkResult();
+            if (args == null || args.Products == null || args.Products.Count == 0)
+            {
+                result.ErrorMessage = "上传参数无效。";
+                return result;
+            }
+
+            string loginMode = args.LoginMode ?? "";
+            foreach (FusionControl control in args.Products)
+            {
+                if (control == null)
+                    continue;
+
+                string sn = control.ProductSN ?? "";
+                CommonFunction.WriteLog("[Upload] product begin SN=" + sn);
+
+                string errMsg = "";
+                string snPath = control.GetSNDir(args.SavePathBase, ref errMsg);
+                if (string.IsNullOrWhiteSpace(snPath))
                 {
-                    if (!savePathList[j].Contains(allProductControl[i].ProductSN))
+                    result.ErrorMessage = string.Format("SN={0} 创建服务器目录失败：{1}", sn, errMsg);
+                    CommonFunction.WriteLog("[Upload] aborted: " + result.ErrorMessage);
+                    return result;
+                }
+
+                var copiedLocalPaths = new List<string>();
+                for (int j = 0; j < args.SavePathList.Count; j++)
+                {
+                    string fileName = args.SavePathList[j];
+                    if (string.IsNullOrEmpty(fileName) || !fileName.Contains(sn))
                         continue;
-                    string serverPath = snPath + "\\" + savePathList[j];
-                    string strLocalPath = Environment.CurrentDirectory + "\\rawdata\\" + savePathList[j];
 
-                    if (File.Exists(strLocalPath))
+                    string serverPath = snPath + "\\" + fileName;
+                    string strLocalPath = Path.Combine(Environment.CurrentDirectory, "rawdata", fileName);
+                    if (!File.Exists(strLocalPath))
                     {
+                        CommonFunction.WriteLog("[Upload] local CSV missing, skip: " + strLocalPath);
+                        continue;
+                    }
+
+                    try
+                    {
+                        CommonFunction.WriteLog("[Upload] File.Copy " + strLocalPath + " -> " + serverPath);
                         File.Copy(strLocalPath, serverPath, true);
-                        File.Delete(strLocalPath);
+                        copiedLocalPaths.Add(strLocalPath);
+                    }
+                    catch (Exception ex)
+                    {
+                        result.ErrorMessage = string.Format("SN={0} 复制 CSV 到服务器失败：{1}", sn, ex.Message);
+                        CommonFunction.WriteLog("[Upload] File.Copy exception: " + ex);
+                        return result;
                     }
                 }
-                
 
                 string saveDir = snPath + "\\upload";
-                Directory.CreateDirectory(saveDir);
-                string savePath = saveDir + "\\" + allProductControl[i].ProductSN + ".xml";
-                allProductControl[i].SaveTestType("0");
-                if (mainInfo.LoginMode.ToUpper().Contains("DEBUG"))
+                try
                 {
-                    allProductControl[i].SavePermsLevel("1");
+                    Directory.CreateDirectory(saveDir);
                 }
-                else if (mainInfo.LoginMode.ToUpper().Contains("RD"))
+                catch (Exception ex)
                 {
-                    allProductControl[i].SavePermsLevel("2");
+                    result.ErrorMessage = string.Format("SN={0} 创建 upload 目录失败：{1}", sn, ex.Message);
+                    CommonFunction.WriteLog("[Upload] Directory.CreateDirectory exception: " + ex);
+                    return result;
                 }
-                else
-                {
-                    allProductControl[i].SavePermsLevel("0");
-                }
-                allProductControl[i].SaveSoftwareInfo("SOFTWARE2219_ITL_FTS", "V1.1.0.1", "Jinfang Ruan", "2024-3-6");
-                if (!allProductControl[i].UploadTestData(savePath,out errMsg))
-                {
-                    ErrorBox(errMsg);
-                    isSaveError = true;
-                }
-            }
-            if(!isSaveError)
-            {
-                AllProducts.Clear();
-                TemptRemainTime.Text = "00:00:00";
-                allProductControl.Clear();
-                testShowControl.Clear();
-                SetOpenTemplateComplete(false);
-                ClearListData();
-                UIControl.SN = "";
-                UIControl.IsSaveEnable = false;
-                UIControl.IsScanEnable = false;
-                templateName = "";
-                ShowTmpltPath();
-                savePathList.Clear();
 
-                IUDLTCC tccCtrl = null;
-                DeviceControl.GetUDLTCCByGUID(TCC_GUID, ref tccCtrl, ref errMsg);
-                if (tccCtrl != null)               
+                string savePath = saveDir + "\\" + sn + ".xml";
+                control.SaveTestType("0");
+                if (loginMode.ToUpper().Contains("DEBUG"))
+                    control.SavePermsLevel("1");
+                else if (loginMode.ToUpper().Contains("RD"))
+                    control.SavePermsLevel("2");
+                else
+                    control.SavePermsLevel("0");
+                control.SaveSoftwareInfo("SOFTWARE2219_ITL_FTS", "V1.1.0.1", "Jinfang Ruan", "2024-3-6");
+
+                if (!control.UploadTestData(savePath, out errMsg))
                 {
-                    tccCtrl.SetTempSetpoint(25, ref errMsg);
+                    result.ErrorMessage = string.Format("SN={0} 上传失败：{1}", sn, errMsg);
+                    CommonFunction.WriteLog("[Upload] UploadTestData failed: " + result.ErrorMessage);
+                    return result;
                 }
+
+                foreach (string localPath in copiedLocalPaths)
+                {
+                    try
+                    {
+                        if (File.Exists(localPath))
+                        {
+                            File.Delete(localPath);
+                            CommonFunction.WriteLog("[Upload] deleted local CSV: " + localPath);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        CommonFunction.WriteLog("[Upload] delete local CSV warning: " + localPath + " " + ex.Message);
+                    }
+                }
+
+                CommonFunction.WriteLog("[Upload] product success SN=" + sn);
+            }
+
+            result.Success = true;
+            return result;
+        }
+
+        private void UploadBK_DoWork(object sender, DoWorkEventArgs e)
+        {
+            var args = e.Argument as UploadWorkArgs;
+            UploadWorkResult result = null;
+            Exception threadEx = null;
+            bool timedOut = false;
+            var staThread = new Thread(() =>
+            {
+                try
+                {
+                    result = DoUploadOnStaThread(args);
+                }
+                catch (Exception ex)
+                {
+                    threadEx = ex;
+                }
+            });
+            staThread.SetApartmentState(ApartmentState.STA);
+            staThread.IsBackground = true;
+            staThread.Start();
+            if (!staThread.Join(UploadStaTimeoutMs))
+                timedOut = true;
+
+            if (result == null)
+                result = new UploadWorkResult();
+            if (timedOut)
+            {
+                result.Success = false;
+                result.ErrorMessage = "上传超时（TAS/MES 无响应），请检查 GDS/TMS 网络与 USL.SYS 配置，并查看 Log 目录下 [Upload] 日志。";
+                CommonFunction.WriteLog("[Upload] STA thread timed out after " + UploadStaTimeoutMs + " ms");
+            }
+            else if (threadEx != null)
+            {
+                result.Success = false;
+                result.ErrorMessage = "上传异常：" + threadEx.Message;
+                CommonFunction.WriteLog("[Upload] STA thread exception: " + threadEx);
+            }
+            e.Result = result;
+        }
+
+        private void UploadBK_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
+        {
+            uploadInProgress = false;
+            var result = e.Result as UploadWorkResult;
+            if (result == null)
+            {
+                UIControl.IsSaveEnable = true;
+                UIControl.IsScanEnable = true;
+                ErrorBox("上传失败：未知错误。");
+                CommonFunction.WriteLog("[Upload] RunWorkerCompleted: result is null");
+                return;
+            }
+
+            if (!result.Success)
+            {
+                UIControl.IsSaveEnable = true;
+                UIControl.IsScanEnable = true;
+                string msg = string.IsNullOrEmpty(result.ErrorMessage) ? "上传失败。" : result.ErrorMessage;
+                RealtimeMsg(msg, StatusType.Error);
+                ErrorBox(msg);
+                CommonFunction.WriteLog("[Upload] failed: " + msg);
+                return;
+            }
+
+            CommonFunction.WriteLog("[Upload] all products uploaded successfully");
+            RealtimeMsg("上传数据完成。");
+
+            string errMsg = "";
+            AllProducts.Clear();
+            TemptRemainTime.Text = "00:00:00";
+            allProductControl.Clear();
+            testShowControl.Clear();
+            SetOpenTemplateComplete(false);
+            ClearListData();
+            UIControl.SN = "";
+            UIControl.IsSaveEnable = false;
+            UIControl.IsScanEnable = false;
+            templateName = "";
+            ShowTmpltPath();
+            savePathList.Clear();
+
+            IUDLTCC tccCtrl = null;
+            DeviceControl.GetUDLTCCByGUID(TCC_GUID, ref tccCtrl, ref errMsg);
+            if (tccCtrl != null)
+            {
+                tccCtrl.SetTempSetpoint(25, ref errMsg);
             }
         }
 

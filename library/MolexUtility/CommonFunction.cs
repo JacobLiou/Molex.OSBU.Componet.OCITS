@@ -392,6 +392,29 @@ namespace MolexUtility
 
         private static object objLock = new object();
 
+        private static string GetExeDir()
+        {
+            try
+            {
+                string curPath = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
+                return Path.GetDirectoryName(curPath) ?? "";
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        /// <summary>
+        /// 日志目录：优先 exe\Log，其次 CurrentDirectory\Log，最后 %TEMP%\OCITestSystem\Log。
+        /// </summary>
+        private static IEnumerable<string> GetLogDirectoryCandidates()
+        {
+            yield return Path.Combine(GetExeDir(), "Log");
+            yield return Path.Combine(Environment.CurrentDirectory, "Log");
+            yield return Path.Combine(Path.GetTempPath(), "OCITestSystem", "Log");
+        }
+
         /// <summary>
         /// 记录log
         /// </summary>
@@ -402,29 +425,35 @@ namespace MolexUtility
             try
             {
                 DateTime currDate = DateTime.Now;
-                //DeleteOldLogFile(currDate);
+                string temp = "时间：" + DateTime.Now.ToString() + "\tTickCount=" + Environment.TickCount + "\r\n" + content + "\r\n";
                 lock (objLock)
                 {
-                    string filePath = "";                    
-                    filePath = Environment.CurrentDirectory + "\\Log";    
-                    if (!Directory.Exists(filePath))
-                        Directory.CreateDirectory(filePath);
-                    string fileName = filePath + "\\" + currDate.Year.ToString() + "-" + currDate.Month.ToString().PadLeft(2, '0') + "-" + currDate.Day.ToString().PadLeft(2, '0') + "log.txt";
-                    if (logPath.Length != 0)
-                        fileName = logPath;
-                    if (!File.Exists(fileName))
-                        File.Create(fileName);
-                    string temp = "时间：" + DateTime.Now.ToString() + "\tTickCount=" + Environment.TickCount + "\r\n" + content + "\r\n";
-                    StreamWriter sw = new StreamWriter(fileName, true, Encoding.UTF8);
-                    sw.WriteLine(temp);
-                    sw.Close();
+                    if (!string.IsNullOrEmpty(logPath))
+                    {
+                        File.AppendAllText(logPath, temp, Encoding.UTF8);
+                        return 0;
+                    }
+
+                    string fileName = currDate.Year.ToString() + "-" + currDate.Month.ToString().PadLeft(2, '0') + "-" + currDate.Day.ToString().PadLeft(2, '0') + "log.txt";
+                    foreach (string logDir in GetLogDirectoryCandidates())
+                    {
+                        if (string.IsNullOrEmpty(logDir))
+                            continue;
+                        try
+                        {
+                            Directory.CreateDirectory(logDir);
+                            File.AppendAllText(Path.Combine(logDir, fileName), temp, Encoding.UTF8);
+                            return 0;
+                        }
+                        catch
+                        {
+                        }
+                    }
                 }
-                return 0;
+                return 1;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                string errMsg = System.Reflection.MethodBase.GetCurrentMethod().DeclaringType.FullName + "."
-                        + System.Reflection.MethodBase.GetCurrentMethod().Name + " error:" + ex.Message + "\r";
                 return 1;
             }
         }

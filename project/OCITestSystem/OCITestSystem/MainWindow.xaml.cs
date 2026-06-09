@@ -24,6 +24,7 @@ using MolexUtility;
 using System.IO;
 using System.Reflection;
 using MolexUtility.UIList;
+using Path = System.IO.Path;
 
 ///<summary>
 ///文件名：MainWindow.xaml.cs
@@ -314,29 +315,230 @@ namespace OCITestSystem
         }
 
         /// <summary>
-        /// 导入module路径下与成员变量中Import对应的Export所有模块
+        /// 始终参与 MEF 组合的 library 插件（与 Module_*.xml 中的 UI 模块分开配置）。
+        /// </summary>
+        private static readonly string[] ModuleCorePluginAssemblies =
+        {
+            "DeviceControl.dll",
+            "ConfigModel.dll",
+            "InterleaverAlgorithm.dll",
+        };
+
+        private static bool assemblyResolveRegistered;
+        private static string probeExeDir = "";
+        private static string probeModuleDir = "";
+        private static string probeModuleCacheDir = "";
+
+        /// <summary>
+        /// 写入 compose 专用日志（不依赖 Environment.CurrentDirectory；网络盘 Log 写失败时回退到 %TEMP%）。
+        /// </summary>
+        private void WriteComposeLog(string message)
+        {
+            string line = string.Format("{0:yyyy-MM-dd HH:mm:ss.fff} {1}\r\n", DateTime.Now, message ?? "");
+            string[] logDirs =
+            {
+                Path.Combine(GetExeDir(), "Log"),
+                Path.Combine(Path.GetTempPath(), "OCITestSystem", "Log")
+            };
+            foreach (string logDir in logDirs)
+            {
+                try
+                {
+                    if (string.IsNullOrEmpty(logDir))
+                        continue;
+                    Directory.CreateDirectory(logDir);
+                    File.AppendAllText(Path.Combine(logDir, "compose.log"), line, Encoding.UTF8);
+                    return;
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        /// <summary>
+        /// 将 module\ 下 DLL 同步到本机临时目录，避免网络盘 LoadFrom/Load 触发 0x80131515。
+        /// </summary>
+        private static string SyncModuleDllCache(string moduleDir)
+        {
+            string cacheDir = Path.Combine(Path.GetTempPath(), "OCITestSystem", "module_cache");
+            Directory.CreateDirectory(cacheDir);
+            foreach (string src in Directory.GetFiles(moduleDir, "*.dll"))
+            {
+                string dest = Path.Combine(cacheDir, Path.GetFileName(src));
+                File.Copy(src, dest, true);
+            }
+            return cacheDir;
+        }
+
+        /// <summary>
+        /// 从本地缓存或文件加载程序集（优先 module 缓存目录）。
+        /// </summary>
+        private static Assembly LoadAssemblyFromFile(string path)
+        {
+            byte[] raw = File.ReadAllBytes(path);
+            return Assembly.Load(raw);
+        }
+
+        private Assembly LoadPluginAssembly(string moduleDir, string dllFileName)
+        {
+            string cachePath = Path.Combine(probeModuleCacheDir, dllFileName);
+            if (File.Exists(cachePath))
+                return LoadAssemblyFromFile(cachePath);
+
+            string modulePath = Path.Combine(moduleDir, dllFileName);
+            if (File.Exists(modulePath))
+                return LoadAssemblyFromFile(modulePath);
+
+            throw new FileNotFoundException("插件 DLL 不存在", dllFileName);
+        }
+
+        /// <summary>
+        /// 从 exe 根目录与 module\ 解析依赖（如 ADODB.dll），仅作依赖加载，不加入 MEF Catalog。
+        /// </summary>
+        private static void EnsureModuleAssemblyProbe(string exeDir, string moduleDir, string moduleCacheDir)
+        {
+            if (assemblyResolveRegistered)
+                return;
+            probeExeDir = exeDir ?? "";
+            probeModuleDir = moduleDir ?? "";
+            probeModuleCacheDir = moduleCacheDir ?? "";
+            AppDomain.CurrentDomain.AssemblyResolve += ModuleAssemblyResolve;
+            assemblyResolveRegistered = true;
+        }
+
+        private static Assembly ModuleAssemblyResolve(object sender, ResolveEventArgs args)
+        {
+            try
+            {
+                string simpleName = new AssemblyName(args.Name).Name;
+                if (string.IsNullOrEmpty(simpleName))
+                    return null;
+
+                string[] dirs = { probeExeDir, probeModuleCacheDir, probeModuleDir };
+                foreach (string dir in dirs)
+                {
+                    if (string.IsNullOrEmpty(dir))
+                        continue;
+                    string path = Path.Combine(dir, simpleName + ".dll");
+                    if (!File.Exists(path))
+                        continue;
+                    return LoadAssemblyFromFile(path);
+                }
+            }
+            catch
+            {
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 收集需加入 MEF 的插件 DLL 文件名（不含路径）。
+        /// </summary>
+        private IEnumerable<string> CollectModulePluginDllNames(string moduleDir)
+        {
+            var dllNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string core in ModuleCorePluginAssemblies)
+                dllNames.Add(core);
+
+            string layoutPath = Path.Combine(moduleDir, "Module_" + stationType + ".xml");
+            if (File.Exists(layoutPath))
+            {
+                var rowDefs = new List<GridLength>();
+                var colDefs = new List<GridLength>();
+                var panels = new List<PanelConfige>();
+                LayoutXMLParser.ParseConfig(layoutPath, ref rowDefs, ref colDefs, ref panels);
+                foreach (PanelConfige panel in panels)
+                {
+                    if (string.IsNullOrWhiteSpace(panel.ModuleName))
+                        continue;
+                    dllNames.Add(panel.ModuleName.Trim() + ".dll");
+                }
+            }
+            else
+            {
+                WriteComposeLog("[Compose] layout xml missing: " + layoutPath);
+            }
+
+            foreach (string dllName in dllNames.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
+                yield return dllName;
+        }
+
+        /// <summary>
+        /// 仅组合 library 插件 DLL；依赖项（ADODB 等）通过 AssemblyResolve 从 module\ 加载，不扫描全部 *.dll。
         /// </summary>
         private void Compose()
         {
-            try {
-                /*AggregateCatalog aggregateCatalog = new AggregateCatalog();
-                AssemblyCatalog assemblyCatalog = new AssemblyCatalog(Assembly.GetExecutingAssembly());
-                DirectoryCatalog directoryCatalog = new DirectoryCatalog("Library1");
-                aggregateCatalog.Catalogs.Add(assemblyCatalog);
-                aggregateCatalog.Catalogs.Add(directoryCatalog);*/
-                //设置目录，让引擎能自动去发现新的扩展
+            WriteComposeLog("[Compose] begin exeDir=" + GetExeDir() + " stationType=" + stationType);
+            try
+            {
+                string exeDir = GetExeDir();
+                string moduleDir = Path.Combine(exeDir, "module");
+
+                if (!Directory.Exists(moduleDir))
+                {
+                    WriteComposeLog("[Compose] module dir missing: " + moduleDir);
+                    MessageBox.Show("module 目录不存在：" + moduleDir);
+                    return;
+                }
+
+                string moduleCacheDir = SyncModuleDllCache(moduleDir);
+                WriteComposeLog("[Compose] module cache: " + moduleCacheDir);
+
+                EnsureModuleAssemblyProbe(exeDir, moduleDir, moduleCacheDir);
+
                 var catalog = new AggregateCatalog();
-                //MessageBox.Show(GetExeDir() + "\\module");
-                var dc = new DirectoryCatalog(GetExeDir() + "\\module");
-                catalog.Catalogs.Add(dc);
-                var ss = dc.LoadedFiles;
+                catalog.Catalogs.Add(new AssemblyCatalog(typeof(EventAggregator).Assembly));
+                WriteComposeLog("[Compose] catalog add ProtocolAggregator (exe root)");
+
+                foreach (string dllName in CollectModulePluginDllNames(moduleDir))
+                {
+                    string cachePath = Path.Combine(moduleCacheDir, dllName);
+                    string modulePath = Path.Combine(moduleDir, dllName);
+                    if (!File.Exists(cachePath) && !File.Exists(modulePath))
+                    {
+                        WriteComposeLog("[Compose] plugin missing: " + dllName);
+                        continue;
+                    }
+
+                    WriteComposeLog("[Compose] catalog add: " + dllName);
+                    Assembly pluginAsm = LoadPluginAssembly(moduleDir, dllName);
+                    catalog.Catalogs.Add(new AssemblyCatalog(pluginAsm));
+                }
+
                 container = new CompositionContainer(catalog);
                 container.ComposeParts(this);
+                WriteComposeLog("[Compose] success");
             }
-            catch(Exception ex)
+            catch (CompositionException ex)
             {
+                string detail = FormatCompositionErrors(ex);
+                WriteComposeLog("[Compose] CompositionException: " + detail);
+                CommonFunction.WriteLog("[Compose] " + detail);
+                MessageBox.Show(detail);
+            }
+            catch (Exception ex)
+            {
+                WriteComposeLog("[Compose] Exception: " + ex);
+                CommonFunction.WriteLog("[Compose] " + ex);
                 MessageBox.Show(ex.Message);
             }
+        }
+
+        private static string FormatCompositionErrors(CompositionException ex)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine(ex.Message);
+            if (ex.Errors != null)
+            {
+                foreach (CompositionError err in ex.Errors)
+                {
+                    sb.AppendLine(err.Description);
+                    if (err.Exception != null)
+                        sb.AppendLine(err.Exception.Message);
+                }
+            }
+            return sb.ToString();
         }
 
         private string GetExeDir()

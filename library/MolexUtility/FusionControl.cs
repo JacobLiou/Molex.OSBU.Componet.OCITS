@@ -132,18 +132,17 @@ namespace MolexUtility
 
         public string GetSNDir(string proFamilyPath,ref string errMsg)
         {
-            
+            errMsg = "";
+            CommonFunction.WriteLog(string.Format("[Upload] CreateSNDataRootDir begin SN={0} base={1}", ProductSN, proFamilyPath));
             USLTASLibraryInterface tas = new USLTASLibraryInterface();
             string snPath = "";
             if(tas.CreateSNDataRootDir(proFamilyPath, ProductSN, ref snPath, ref errMsg))
             {
+                CommonFunction.WriteLog(string.Format("[Upload] CreateSNDataRootDir ok snPath={0}", snPath));
                 return snPath;
             }
-            else
-            {
-                return "";
-            }
-            //return ".//data";
+            CommonFunction.WriteLog("[Upload] CreateSNDataRootDir failed: " + errMsg);
+            return "";
         }
 
         private static void LogOpenTemplateStep(string step, string sn)
@@ -474,29 +473,40 @@ namespace MolexUtility
             errMsg = "";
             try
             {
-                USLTASLibraryInterface tas = new USLTASLibraryInterface();
+                CommonFunction.WriteLog(string.Format("[Upload] SaveDataToFile begin SN={0} path={1}", ProductSN, fileName));
                 if (!SaveDataToFile(fileName, out errMsg))
                 {
+                    CommonFunction.WriteLog("[Upload] SaveDataToFile failed: " + errMsg);
                     return false;
                 }
-                
+                CommonFunction.WriteLog("[Upload] SaveDataToFile ok");
+
+                USLTASLibraryInterface tas = new USLTASLibraryInterface();
+                CommonFunction.WriteLog("[Upload] tas.UploadTestData begin");
                 string uploadRes = tas.UploadTestData(fileName);
                 if (uploadRes != "")
                 {
                     errMsg = "上传出错：" + uploadRes;
+                    CommonFunction.WriteLog("[Upload] tas.UploadTestData failed: " + errMsg);
                     return false;
                 }
+                CommonFunction.WriteLog("[Upload] tas.UploadTestData ok");
+
+                CommonFunction.WriteLog(string.Format("[Upload] TriggerTestResultUpload begin SN={0}", ProductSN));
                 int nRes=tas.TriggerTestResultUpload(ProductSN, ref uploadRes);
                 if(nRes<0)
                 {
                     errMsg = "上传Trigger出错：" + uploadRes;
+                    CommonFunction.WriteLog("[Upload] TriggerTestResultUpload failed: " + errMsg);
                     return false;
                 }
+                CommonFunction.WriteLog("[Upload] TriggerTestResultUpload ok SN=" + ProductSN);
                 return true;
             }
             catch (Exception ex)
             {
                 errMsg += "上传数据UploadTestData error(Exception):" + ex.Message;
+                CommonFunction.WriteLog("[Upload] UploadTestData exception: " + ex);
                 return false;
             }
         }

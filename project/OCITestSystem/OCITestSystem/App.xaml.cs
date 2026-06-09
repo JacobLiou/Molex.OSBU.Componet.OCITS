@@ -1,20 +1,5 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Configuration;
-using System.Data;
-using System.Linq;
 using System.Windows;
-
-using System.Text;
-using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
-using System.Threading;
 using System.Windows.Threading;
 
 namespace OCITestSystem
@@ -46,16 +31,15 @@ namespace OCITestSystem
         private void Application_Startup(object sender, StartupEventArgs e)
         {
             string[] args = e.Args;
+            string testArg = "";
             //rjf test
-           /* if (args.Length == 0)
+            if (args.Length == 0)
             {
-                MessageBox.Show("Mims传入信息为空！");
+                testArg = "<MIMS>\r\n<AppInfo Type = \"ProgInfo\">\r\n<User>24351</User>\r\n<PN>1831760177</PN>\r\n<SN>CFOIC0001</SN>\r\n<Process>Interleaver-ITL-终测</Process>\r\n<LoginMode>RDModule</LoginMode>\r\n<SoftwareID>NA</SoftwareID>\r\n<MesMode>MESOnline</MesMode>\r\n<CheckUser>9353</CheckUser>\r\n<CheckPwd>AF3F3335190E8D197A020F41360EBA5B</CheckPwd>\r\n</AppInfo>\r\n</MIMS>\r\n";
             }
             else
             {
                 //MFG/Debug/RD
-
-                string testArg = "";
                 foreach (string str in args)
                 {
                     if (str.Contains("Type"))
@@ -75,13 +59,11 @@ namespace OCITestSystem
                     {
                         testArg += str;
                     }
-                }*/
-                //rjf test
-                string testArg = "<MIMS>\r\n<AppInfo Type = \"ProgInfo\">\r\n<User>24351</User>\r\n<PN>1831760177</PN>\r\n<SN>CFOIC0001</SN>\r\n<Process>Interleaver-ITL-终测</Process>\r\n<LoginMode>RDModule</LoginMode>\r\n<SoftwareID>NA</SoftwareID>\r\n<MesMode>MESOnline</MesMode>\r\n<CheckUser>9353</CheckUser>\r\n<CheckPwd>AF3F3335190E8D197A020F41360EBA5B</CheckPwd>\r\n</AppInfo>\r\n</MIMS>\r\n";
-                //MessageBox.Show(testArg);
-                MainWindow mainWindow = new OCITestSystem.MainWindow(testArg);
-                mainWindow.Show();
-            //}
+                }
+            }
+
+            MainWindow mainWindow = new OCITestSystem.MainWindow(testArg);
+            mainWindow.Show();
         }
     }
 }
