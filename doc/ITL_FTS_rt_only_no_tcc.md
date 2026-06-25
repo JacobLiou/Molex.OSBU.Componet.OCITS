@@ -6,7 +6,7 @@
 
 | 文件（`{exe}\set\`） | API | 作用 |
 |----------------------|-----|------|
-| `DisableTccChamberCheck.txt` | `TasRuntimeConfig.IsTccChamberCheckDisabled()` | 测试前不校验循环箱是否存在/读温/温差 |
+| `DisableTccChamberCheck.txt` | `TasRuntimeConfig.IsTccChamberCheckDisabled()` | 跳过循环箱读温/设温/拷温倒计时及扫描前 ±2°C 门禁 |
 | `RtOnlyTest.txt` | `TasRuntimeConfig.IsRtOnlyTestMode()` | 一键测试与单项测试仅调度 **20~30°C** 项，跳过 LT/HT |
 
 示例可复制：
@@ -27,12 +27,12 @@
 
 - **一键测试**：只扫常温 Demux Even/Odd 等；常温扫完后若模板仍有 LT/HT 未测项，提示「RtOnlyTest：无常温待测项…」而非继续高低温。
 - **单项测试**：手选 LT/HT 行会提示仅支持常温；选 RT 行可正常扫描。
-- **状态栏**：出现「已跳过循环箱温度校验（set\DisableTccChamberCheck.txt）」。
+- **状态栏**：出现「已跳过循环箱温度校验（set\DisableTccChamberCheck.txt）」；不会自动 `SetTempSetpoint`，也不会启动烤温倒计时。
 - **列表**：LT/HT 行仍显示，便于对照模板，只是不会自动调度。
 
 ## 恢复产线
 
-删除上述两个 txt（或仅删除不需要的一项），重新部署/重启即可恢复 TCC 校验与全温区一键测试。
+删除上述两个 txt（或仅删除不需要的一项），重新部署/重启即可恢复 TCC 自动设温、拷温倒计时与全温区一键测试。
 
 ## 与光开关 / Demux 的关系
 
@@ -41,4 +41,4 @@
 ## 相关源码
 
 - [`library/MolexUtility/TasRuntimeConfig.cs`](../library/MolexUtility/TasRuntimeConfig.cs)
-- [`OperateInteleaverFinalTest.xaml.cs`](../library/UIOperateInterleaverFinalTest/UIOperateInterleaverFinalTest/OperateInteleaverFinalTest.xaml.cs) — `EnsureChamberReadyForTest`、`OnekeyScan`、`btnSingleScan_Click`
+- [`OperateInteleaverFinalTest.xaml.cs`](../library/UIOperateInterleaverFinalTest/UIOperateInterleaverFinalTest/OperateInteleaverFinalTest.xaml.cs) — `BeginChamberPrepOrScan`、`EnsureChamberReadyForTest`、`OnekeyScan`、`btnSingleScan_Click`

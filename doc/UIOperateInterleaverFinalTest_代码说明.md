@@ -48,8 +48,8 @@
 1. **主程序广播 `EventMainInit`** → 本控件 `Init(MainInitInfo)`：MESLESS 账号、构 `curveShow`/`paramCal`、拼接 `reference`/`rawdata` 绝对路径、设备初始化失败则提示；成功则读 FSTP 功率计数并 **启动归零计时 `refTimeCheckBK`**。
 2. **用户输入 SN →「打开模板」**：金样校验、`FusionControl.OpenTemplate`，解析模板 CFG（频率范围、PASSBAND、算法、GROUP 扫描组、REF 起止波长、PDL 步进等），构建 `portAssistant`、`_scanList`、`portAndPMDic`，初始化曲线轴；**尝试 `ReadRefData` 加载已有归零**；发布模板/列表事件。
 3. **「系统归零」**：按端口顺序弹窗确认 → `SetSwitch` → `BackgroundWorker`：`Scan_DoWork` → **当前固定 FSTP 路径** `ScanAndCalResultFSTP`（`RefWithPDL`）→ 写 `reference\referenceWithPDLPort-product{n}-port{p}.csv`；`ScanFinish` 链式继续下一端口 `ScanRef`。
-4. **「单项测试」**：依赖列表选中项（`EventListSelectChanged`）；检查组内端口已归零；可选 **烤温**（`bakeTimeCheckBK` + TCC）；`DoScanOnBK` → `TestWithPDL` → 扫描完成后 **多线程 `CalResByPort`**，再 **`CalPortRes`/`CalBPParamRes`**，更新列表与通过图标。
-5. **「一键测试」**：`OnekeyScan` 自动挑选未测端口与温度；同样烤温/扫描链；扫描类型为 `TestWithPDLOnekey`，成功后 **递归调用 `OnekeyScan`** 直至全部完成。
+4. **「单项测试」**：依赖列表选中项（`EventListSelectChanged`）；检查组内端口已归零；`BeginChamberPrepOrScan`（必要时 `SetTempSetpoint` + `bakeTimeCheckBK` 拷温）→ `DoScanOnBK` → 扫描完成后 **多线程 `CalResByPort`**，再 **`CalPortRes`/`CalBPParamRes`**，更新列表与通过图标。
+5. **「一键测试」**：`OnekeyScan` 自动挑选未测端口与温度；同样经 `BeginChamberPrepOrScan` 设温/拷温/扫描链；扫描类型为 `TestWithPDLOnekey`，成功后 **递归调用 `OnekeyScan`** 直至全部完成。
 6. **「上传数据」**：rawdata 文件复制到 SN 目录、写权限与软件信息、`FusionControl.UploadTestData`；成功后清空产品与状态，TCC 回常温。
 
 ### 2.2 流程图（总览）
@@ -267,9 +267,10 @@ flowchart TD
 
 | 方法 | 行为要点 |
 |------|----------|
-| `OnekeyScan` | 按 `IsTested` 与 `TestTmpt` 选下一组端口；`IsScanRef` 检查同温是否均已归零（实现上 **遍历所有 `portAssistant` 中首温相等的项**，**未使用传入端口列表**）；`SetSwitch`；比较 **TCC 当前温与目标温**（或 TCC 为空时的退化逻辑）决定 **`bakeTimeCheckBK.RunWorkerAsync(分钟)`** 或直接 `DoScanOnBK`；设置 `scanDetailInfo.ScanType=TestWithPDLOnekey`。 |
-| `btnSingleScan_Click` | 依赖 `selectItem`（列表选中）；组端口逻辑与一键类似，`ScanType=TestWithPDL`；烤温完成后 `DoScanOnBK`。 |
-| `BakeTimeCheck_*` | `RunWorkerAsync(tmptChangeTimes * 60)`：`BakeTimeCheck_DoWork` 内将该值再 **`×1000` 当作毫秒**与 `Environment.TickCount` 比较，故 **`e.Argument` 表示的应为「秒」**（即模板中 `TmptChangeTimes` 若为「分钟」，则 `* 60` 后为秒）。倒计时的 `Progress` 分支里将 `time` 再除以 1000 后按分:秒显示。 |
+| `BeginChamberPrepOrScan` | 一键/单项共用：读 TCC 实测温 → `IsBakeRequired`（与扫描门禁同为 **±2°C**）判断是否需要拷温；不需拷温则 `EnsureChamberReadyForTest` 后 `DoScanOnBK`；需要则 `SetTempSetpoint` + `bakeTimeCheckBK.RunWorkerAsync(TmptChangeTimes×60)`，倒计时结束再 `DoScanOnBK`。`DisableTccChamberCheck.txt` 时跳过读温/设温/拷温/门禁。 |
+| `OnekeyScan` | 按 `IsTested` 与 `TestTmpt` 选下一组端口；`IsScanRef`；`TrySetSwitchBeforeScan`；`BeginChamberPrepOrScan`；`scanDetailInfo.ScanType=TestWithPDLOnekey`。 |
+| `btnSingleScan_Click` | 依赖 `selectItem`；组端口逻辑与一键类似；`BeginChamberPrepOrScan`；`ScanType=TestWithPDL`。 |
+| `BakeTimeCheck_*` | `RunWorkerAsync(tmptChangeTimes * 60)`：`BakeTimeCheck_DoWork` 内将该值再 **`×1000` 当作毫秒**与 `Environment.TickCount` 比较（模板 `TmptChangeTimes` 为分钟）。`DoWork` 开始设 `curBakeStatus=Baking`；`Progress` 在 `time==0` 时设 `BakeComplete` 并调用 `DoScanOnBK`（扫描前仍二次校验 ±2°C）。 |
 
 ### 7.8 上传与杂项
 

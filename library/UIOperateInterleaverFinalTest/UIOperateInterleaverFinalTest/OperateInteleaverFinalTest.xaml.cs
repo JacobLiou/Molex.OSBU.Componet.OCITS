@@ -494,6 +494,7 @@ namespace UIOperateInterleaverFinalTest
 
         private void BakeTimeCheck_DoWork(object sender, DoWorkEventArgs e)
         {
+            curBakeStatus = BakeStatus.Baking;
             double totalBakeTime = (double)e.Argument;
             totalBakeTime = totalBakeTime * 1000;
             int beginTick= System.Environment.TickCount;
@@ -523,8 +524,9 @@ namespace UIOperateInterleaverFinalTest
             time = time / 1000;
             if(time==0)
             {
+                curBakeStatus = BakeStatus.BakeComplete;
                 TemptRemainTime.Text = "烤温完成";
-                UIControl.IsClearSNVisiable = Visibility.Visible;             
+                UIControl.IsClearSNVisiable = Visibility.Visible;
                 DoScanOnBK();
             }
             else
@@ -3478,6 +3480,128 @@ namespace UIOperateInterleaverFinalTest
             return true;
         }
 
+        private bool TryGetTccController(out IUDLTCC tcc, out string errMsg)
+        {
+            tcc = null;
+            errMsg = "";
+            if (DeviceControl == null)
+            {
+                errMsg = "设备控制未初始化。";
+                return false;
+            }
+            DeviceControl.GetUDLTCCByGUID(TCC_GUID, ref tcc, ref errMsg);
+            return tcc != null;
+        }
+
+        private bool IsBakeRequired(double targetTmpt, double actualTmpt, bool hasActualReading)
+        {
+            if (TasRuntimeConfig.IsTccChamberCheckDisabled())
+                return false;
+
+            if (hasActualReading)
+                return Math.Abs(actualTmpt - targetTmpt) > TccTempToleranceCelsius;
+
+            if (curTestTmpt < -299)
+            {
+                if (IsRoomTemperature(targetTmpt))
+                    return false;
+                return true;
+            }
+            return Math.Abs(curTestTmpt - targetTmpt) > 0.001;
+        }
+
+        private static bool TrySetChamberSetpoint(IUDLTCC tcc, double targetTmpt, ref string errMsg)
+        {
+            if (tcc == null)
+            {
+                errMsg = "循环箱未配置或未连接。";
+                return false;
+            }
+            int res = tcc.SetTempSetpoint(targetTmpt, ref errMsg);
+            if (res != 0)
+                res = tcc.SetTempSetpoint(targetTmpt, ref errMsg);
+            return res == 0;
+        }
+
+        private void RestoreUiOnChamberFail(bool restoreOnekeyUiOnFail)
+        {
+            if (!restoreOnekeyUiOnFail)
+                return;
+            RealtimeMsg("一键测试结束");
+            UIControl.IsReferenceEnable = true;
+            UIControl.IsScanEnable = true;
+            UIControl.IsSaveEnable = true;
+        }
+
+        private bool BeginChamberPrepOrScan(double targetTmpt, double soakMinutes, bool restoreOnekeyUiOnFail)
+        {
+            if (TasRuntimeConfig.IsTccChamberCheckDisabled())
+            {
+                RealtimeMsg("已跳过循环箱温度校验（set\\DisableTccChamberCheck.txt）");
+                curTestTmpt = targetTmpt;
+                DoScanOnBK();
+                return true;
+            }
+
+            string errMsg = "";
+            IUDLTCC tccCtrl = null;
+            bool hasTcc = TryGetTccController(out tccCtrl, out errMsg);
+            bool hasActualReading = false;
+            double actualTmpt = 0;
+
+            if (hasTcc)
+            {
+                if (TryReadChamberTemperature(tccCtrl, out actualTmpt, ref errMsg) != 0)
+                {
+                    string message = string.Format("读取循环箱温度失败:{0}", errMsg);
+                    RealtimeMsg(message, StatusType.Error);
+                    ErrorBox(message);
+                    RestoreUiOnChamberFail(restoreOnekeyUiOnFail);
+                    return false;
+                }
+                hasActualReading = true;
+                RealtimeMsg(string.Format("读取循环箱温度:{0:F1}°C", actualTmpt));
+            }
+
+            if (!IsBakeRequired(targetTmpt, actualTmpt, hasActualReading))
+            {
+                curTestTmpt = targetTmpt;
+                if (!EnsureChamberReadyForTest(targetTmpt, restoreOnekeyUiOnFail))
+                    return false;
+                DoScanOnBK();
+                return true;
+            }
+
+            if (!hasTcc)
+            {
+                string message = "循环箱未连接，无法进行变温拷温，请先连接循环箱！";
+                RealtimeMsg(message, StatusType.Error);
+                ErrorBox(message);
+                RestoreUiOnChamberFail(restoreOnekeyUiOnFail);
+                return false;
+            }
+
+            RealtimeMsg(string.Format("开始进行 {0:F1}°C 拷温", targetTmpt));
+            if (!TrySetChamberSetpoint(tccCtrl, targetTmpt, ref errMsg))
+            {
+                string message = string.Format("循环箱设置温度失败:{0:F1}°C，{1}", targetTmpt, errMsg);
+                RealtimeMsg(message, StatusType.Error);
+                ErrorBox(message);
+                RestoreUiOnChamberFail(restoreOnekeyUiOnFail);
+                return false;
+            }
+
+            if (bakeTimeCheckBK.IsBusy)
+                bakeTimeCheckBK.CancelAsync();
+
+            curBakeStatus = BakeStatus.Baking;
+            UIControl.IsClearSNVisiable = Visibility.Visible;
+            TemptRemainTime.Text = "00:00:00";
+            curTestTmpt = targetTmpt;
+            bakeTimeCheckBK.RunWorkerAsync(soakMinutes * 60);
+            return true;
+        }
+
         private bool EnsureChamberReadyForTest(double requiredTmpt, bool restoreOnekeyUiOnFail = false)
         {
             if (TasRuntimeConfig.IsTccChamberCheckDisabled())
@@ -3494,13 +3618,7 @@ namespace UIOperateInterleaverFinalTest
             }
             RealtimeMsg(message, StatusType.Error);
             ErrorBox(message);
-            if (restoreOnekeyUiOnFail)
-            {
-                RealtimeMsg("一键测试结束");
-                UIControl.IsReferenceEnable = true;
-                UIControl.IsScanEnable = true;
-                UIControl.IsSaveEnable = true;
-            }
+            RestoreUiOnChamberFail(restoreOnekeyUiOnFail);
             return false;
         }
 
@@ -3735,6 +3853,9 @@ namespace UIOperateInterleaverFinalTest
         {
             if (MessageBox.Show("正在测试，是否要清空列表！", "温馨提示", MessageBoxButton.OKCancel, MessageBoxImage.Warning) == MessageBoxResult.OK)
             {
+                if (bakeTimeCheckBK.IsBusy)
+                    bakeTimeCheckBK.CancelAsync();
+                curBakeStatus = BakeStatus.UnBake;
                 AllProducts.Clear();
                 allProductControl.Clear();
                 testShowControl.Clear();
@@ -3920,11 +4041,9 @@ namespace UIOperateInterleaverFinalTest
             }
             UpdateItem(testShowControl[productID-1].GetAllTestInfo()[0], productID-1, 0, nextSeleted);
 
-            if (!EnsureChamberReadyForTest(scanTmpt, restoreOnekeyUiOnFail: true))
+            double soakMinutes = portAssistant[i].TmptChangeTimes;
+            if (!BeginChamberPrepOrScan(scanTmpt, soakMinutes, restoreOnekeyUiOnFail: true))
                 return;
-
-            curTestTmpt = scanTmpt;
-            DoScanOnBK();
         }
 
         public void GetUDLMessage(ref string msg, ref bool isSuccess)
@@ -3964,6 +4083,8 @@ namespace UIOperateInterleaverFinalTest
         private void UserControl_Unloaded(object sender, RoutedEventArgs e)
         {
             refTimeCheckBK.CancelAsync();
+            if (bakeTimeCheckBK.IsBusy)
+                bakeTimeCheckBK.CancelAsync();
         }
 
         private void btnSingleScan_Click(object sender, RoutedEventArgs e)
@@ -4032,8 +4153,6 @@ namespace UIOperateInterleaverFinalTest
                         testTmpt));
                     return;
                 }
-                if (!EnsureChamberReadyForTest(testTmpt))
-                    return;
 
                 scanDetailInfo.ScanType = SCANTYPE.TestWithPDL;
                 scanDetailInfo.ProductIndex = selectItem.ProductIndex + 1;
@@ -4043,8 +4162,11 @@ namespace UIOperateInterleaverFinalTest
                     UIControl.IsScanEnable = true;
                     return;
                 }
-                curTestTmpt = testTmpt;
-                DoScanOnBK();
+                if (!BeginChamberPrepOrScan(testTmpt, switchAssist.TmptChangeTimes, restoreOnekeyUiOnFail: false))
+                {
+                    UIControl.IsScanEnable = true;
+                    return;
+                }
             }
             //ReleaseCom(deviceEngine);
             //ReleaseCom(tccCtrl);
