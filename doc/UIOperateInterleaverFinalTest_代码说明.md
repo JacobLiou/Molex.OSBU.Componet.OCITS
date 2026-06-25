@@ -268,6 +268,7 @@ flowchart TD
 | 方法 | 行为要点 |
 |------|----------|
 | `BeginChamberPrepOrScan` | 一键/单项共用：读 TCC 实测温 → `IsBakeRequired`（与扫描门禁同为 **±2°C**）判断是否需要拷温；不需拷温则 `EnsureChamberReadyForTest` 后 `DoScanOnBK`；需要则 `SetTempSetpoint` + `bakeTimeCheckBK.RunWorkerAsync(TmptChangeTimes×60)`，倒计时结束再 `DoScanOnBK`。`DisableTccChamberCheck.txt` 时跳过读温/设温/拷温/门禁。 |
+| `TryReadChamberTemperature` | `GetCurrentTemp` 失败时最多 **6 次**、间隔 **1.5s** 重试，并 `RealtimeMsg` 记录重试；成功即返回（首次成功无额外等待）。 |
 | `OnekeyScan` | 按 `IsTested` 与 `TestTmpt` 选下一组端口；`IsScanRef`；`TrySetSwitchBeforeScan`；`BeginChamberPrepOrScan`；`scanDetailInfo.ScanType=TestWithPDLOnekey`。 |
 | `btnSingleScan_Click` | 依赖 `selectItem`；组端口逻辑与一键类似；`BeginChamberPrepOrScan`；`ScanType=TestWithPDL`。 |
 | `BakeTimeCheck_*` | `RunWorkerAsync(tmptChangeTimes * 60)`：`BakeTimeCheck_DoWork` 内将该值再 **`×1000` 当作毫秒**与 `Environment.TickCount` 比较（模板 `TmptChangeTimes` 为分钟）。`DoWork` 开始设 `curBakeStatus=Baking`；`Progress` 在 `time==0` 时设 `BakeComplete` 并调用 `DoScanOnBK`（扫描前仍二次校验 ±2°C）。 |

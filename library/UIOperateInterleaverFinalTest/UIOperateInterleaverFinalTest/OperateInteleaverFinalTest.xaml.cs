@@ -91,6 +91,12 @@ namespace UIOperateInterleaverFinalTest
         /// <summary>循环箱实测温度与模板要求温度的允许偏差（°C）</summary>
         private const double TccTempToleranceCelsius = 2.0;
 
+        /// <summary>循环箱读温最大尝试次数（含首次）</summary>
+        private const int TccReadMaxAttempts = 6;
+
+        /// <summary>循环箱读温失败后重试间隔（毫秒）</summary>
+        private const int TccReadRetryDelayMs = 1500;
+
         /// <summary>TAS 打开模板 STA 线程最长等待（毫秒）</summary>
         private const int OpenTemplateStaTimeoutMs = 180000;
 
@@ -3434,7 +3440,7 @@ namespace UIOperateInterleaverFinalTest
             return true;
         }
 
-        private static int TryReadChamberTemperature(IUDLTCC tcc, out double actual, ref string errMsg)
+        private int TryReadChamberTemperature(IUDLTCC tcc, out double actual, ref string errMsg)
         {
             actual = 0;
             if (tcc == null)
@@ -3442,13 +3448,28 @@ namespace UIOperateInterleaverFinalTest
                 errMsg = "循环箱未配置或未连接。";
                 return 1;
             }
-            int res = tcc.GetCurrentTemp(out actual, ref errMsg);
-            if (res != 0)
+            string lastErrMsg = "";
+            for (int attempt = 1; attempt <= TccReadMaxAttempts; attempt++)
             {
-                Thread.Sleep(100);
-                res = tcc.GetCurrentTemp(out actual, ref errMsg);
+                errMsg = "";
+                int res = tcc.GetCurrentTemp(out actual, ref errMsg);
+                if (res == 0)
+                {
+                    if (attempt > 1)
+                        RealtimeMsg(string.Format("循环箱读温第 {0} 次成功，实测 {1:F1}°C", attempt, actual));
+                    return 0;
+                }
+                lastErrMsg = errMsg;
+                if (attempt < TccReadMaxAttempts)
+                {
+                    RealtimeMsg(string.Format(
+                        "循环箱读温失败 ({0}/{1}):{2}，{3:F1}s 后重试",
+                        attempt, TccReadMaxAttempts, errMsg, TccReadRetryDelayMs / 1000.0));
+                    Thread.Sleep(TccReadRetryDelayMs);
+                }
             }
-            return res;
+            errMsg = lastErrMsg;
+            return 1;
         }
 
         private bool TryValidateChamberTemperature(double requiredTmpt, out string message)
