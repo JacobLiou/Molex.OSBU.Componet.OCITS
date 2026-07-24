@@ -3544,6 +3544,29 @@ namespace UIOperateInterleaverFinalTest
             return res == 0;
         }
 
+        /// <summary>
+        /// 三温测完（常为高温）后设回常温，利用回温时间做上传/开下一批模板。
+        /// </summary>
+        private void RequestChamberReturnToRoomTemp()
+        {
+            if (TasRuntimeConfig.IsTccChamberCheckDisabled())
+                return;
+
+            string errMsg = "";
+            IUDLTCC tccCtrl;
+            if (!TryGetTccController(out tccCtrl, out errMsg) || tccCtrl == null)
+            {
+                RealtimeMsg("循环箱回常温跳过：未配置或未连接。", StatusType.Warning);
+                return;
+            }
+
+            const double roomSetpoint = 25;
+            if (TrySetChamberSetpoint(tccCtrl, roomSetpoint, ref errMsg))
+                RealtimeMsg(string.Format("测试结束，循环箱已设定回常温 {0:F0}°C，可利用回温时间准备下一批。", roomSetpoint));
+            else
+                RealtimeMsg(string.Format("循环箱回常温失败:{0}", errMsg), StatusType.Error);
+        }
+
         private void RestoreUiOnChamberFail(bool restoreOnekeyUiOnFail)
         {
             if (!restoreOnekeyUiOnFail)
@@ -3764,7 +3787,16 @@ namespace UIOperateInterleaverFinalTest
                 {
                     ParamItemUpdate(CurProductIndex);
                     if (TryAbortBatchForRoomTempIl())
+                    {
+                        singleScanSameTmptActive = false;
                         return;
+                    }
+                    if (ContinueSingleScanSameTemperature())
+                        return;
+                }
+                else
+                {
+                    singleScanSameTmptActive = false;
                 }
                 UIControl.IsScanEnable = true;
                 UIControl.IsSaveEnable = true;              
@@ -3893,6 +3925,11 @@ namespace UIOperateInterleaverFinalTest
         /// </summary>
         private double curTestTmpt = -1;
 
+        /// <summary>
+        /// 单项测试：同温度下串行测完当前产品全部端口（如 Demux Even/Odd 两路）。
+        /// </summary>
+        private bool singleScanSameTmptActive = false;
+
        
         private int CurProductIndex = 0;
         private void btnOnekeyScan_Click(object sender, RoutedEventArgs e)
@@ -3994,6 +4031,8 @@ namespace UIOperateInterleaverFinalTest
                 string completeMsg = "一键测试完成！";
                 if (rtOnly && !anyRtPending && anyNonRtUntested)
                     completeMsg = "RtOnlyTest：无常温待测项，一键测试结束。（低温/高温项已跳过）";
+                // 先下发回常温，再弹窗，避免等确认才开始回温
+                RequestChamberReturnToRoomTemp();
                 MessageBox.Show(completeMsg);
                 UIControl.IsScanEnable = true;
                 UIControl.IsSaveEnable = true;
@@ -4108,6 +4147,81 @@ namespace UIOperateInterleaverFinalTest
                 bakeTimeCheckBK.CancelAsync();
         }
 
+        /// <summary>
+        /// 单项测试扫完一路后：同温度同产品继续测下一路（Demux Even/Odd 串行）。
+        /// </summary>
+        /// <returns>true 表示已启动下一扫</returns>
+        private bool ContinueSingleScanSameTemperature()
+        {
+            if (!singleScanSameTmptActive)
+                return false;
+
+            int productID = scanDetailInfo.ProductIndex;
+            double scanTmpt = curTestTmpt;
+            int i;
+            for (i = 0; i < portAssistant.Count; i++)
+            {
+                if (portAssistant[i].ProductIndex != productID)
+                    continue;
+                if (portAssistant[i].TestTmpt != scanTmpt)
+                    continue;
+                if (!IsTestTemperatureAllowed(portAssistant[i].TestTmpt))
+                    continue;
+                if (!portAssistant[i].IsTested)
+                    break;
+            }
+            if (i == portAssistant.Count)
+            {
+                singleScanSameTmptActive = false;
+                RealtimeMsg(string.Format("单项测试完成（温度 {0:F1}°C，两路已测）", scanTmpt));
+                return false;
+            }
+
+            int scanIndex = portAssistant[i].ScanIndex;
+            string testPortName = portAssistant[i].Port;
+            scanDetailInfo.Ports.Clear();
+            if (IsDemuxDualPortTemplate())
+            {
+                scanDetailInfo.Ports.Add(portAssistant[i].PortIndex);
+            }
+            else
+            {
+                foreach (PortAssist assist in portAssistant)
+                {
+                    if (productID == assist.ProductIndex && scanIndex == assist.ScanIndex
+                        && scanTmpt == assist.TestTmpt)
+                    {
+                        testPortName = assist.Port;
+                        scanDetailInfo.Ports.Add(assist.PortIndex);
+                    }
+                }
+            }
+            scanDetailInfo.ProductIndex = productID;
+            string errMsg = "";
+            if (!IsScanRef(scanDetailInfo.Ports, ref errMsg))
+            {
+                WarningBox(errMsg);
+                singleScanSameTmptActive = false;
+                return false;
+            }
+            if (!TrySetSwitchBeforeScan(productID, testPortName))
+            {
+                singleScanSameTmptActive = false;
+                return false;
+            }
+
+            RealtimeMsg(string.Format("单项测试续测同温下一路:{0}", portAssistant[i].Name));
+            scanDetailInfo.ScanType = SCANTYPE.TestWithPDL;
+            UIControl.IsScanEnable = false;
+            if (!BeginChamberPrepOrScan(scanTmpt, portAssistant[i].TmptChangeTimes, restoreOnekeyUiOnFail: false))
+            {
+                singleScanSameTmptActive = false;
+                UIControl.IsScanEnable = true;
+                return false;
+            }
+            return true;
+        }
+
         private void btnSingleScan_Click(object sender, RoutedEventArgs e)
         {
             if (IsBatchTestAbortedBlocked())
@@ -4175,16 +4289,27 @@ namespace UIOperateInterleaverFinalTest
                     return;
                 }
 
+                // 单项：同产品同温度全部端口置为未测，扫完后串行续测另一路
+                int productId = selectItem.ProductIndex + 1;
+                foreach (PortAssist assist in portAssistant)
+                {
+                    if (assist.ProductIndex == productId && assist.TestTmpt == testTmpt)
+                        assist.IsTested = false;
+                }
+                singleScanSameTmptActive = true;
+
                 scanDetailInfo.ScanType = SCANTYPE.TestWithPDL;
-                scanDetailInfo.ProductIndex = selectItem.ProductIndex + 1;
+                scanDetailInfo.ProductIndex = productId;
                 UIControl.IsScanEnable = false;
                 if (!TrySetSwitchBeforeScan(scanDetailInfo.ProductIndex, testPortName))
                 {
+                    singleScanSameTmptActive = false;
                     UIControl.IsScanEnable = true;
                     return;
                 }
                 if (!BeginChamberPrepOrScan(testTmpt, switchAssist.TmptChangeTimes, restoreOnekeyUiOnFail: false))
                 {
+                    singleScanSameTmptActive = false;
                     UIControl.IsScanEnable = true;
                     return;
                 }
@@ -4462,7 +4587,6 @@ namespace UIOperateInterleaverFinalTest
             CommonFunction.WriteLog("[Upload] all products uploaded successfully");
             RealtimeMsg("上传数据完成。");
 
-            string errMsg = "";
             AllProducts.Clear();
             TemptRemainTime.Text = "00:00:00";
             allProductControl.Clear();
@@ -4476,12 +4600,8 @@ namespace UIOperateInterleaverFinalTest
             ShowTmpltPath();
             savePathList.Clear();
 
-            IUDLTCC tccCtrl = null;
-            DeviceControl.GetUDLTCCByGUID(TCC_GUID, ref tccCtrl, ref errMsg);
-            if (tccCtrl != null)
-            {
-                tccCtrl.SetTempSetpoint(25, ref errMsg);
-            }
+            // 一键结束时通常已回常温；上传后再设一次，保证流程闭环
+            RequestChamberReturnToRoomTemp();
         }
 
         private void UserControl_PreviewKeyDown(object sender, KeyEventArgs e)
