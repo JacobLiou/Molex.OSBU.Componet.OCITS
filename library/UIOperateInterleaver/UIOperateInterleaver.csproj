@@ -73,6 +73,7 @@
     <Compile Include="InterleaverCurve.cs" />
     <Compile Include="InterleaverParamCal.cs" />
     <Compile Include="InterleaverScanResult.cs" />
+    <Compile Include="SpectrumSharePublisher.cs" />
     <Compile Include="OperateInterleaver.xaml.cs">
       <DependentUpon>OperateInterleaver.xaml</DependentUpon>
     </Compile>

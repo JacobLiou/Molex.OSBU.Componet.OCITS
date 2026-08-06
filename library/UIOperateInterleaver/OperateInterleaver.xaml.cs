@@ -2311,6 +2311,7 @@ namespace UIOperateInterleaver
                 
                 UpdateSpecialParam(scanInfo.Port);
                 UpdateParamList();
+                TryPublishSpectrumShare(scanInfo);
                 /*if (scanInfo.ScanType == SCANTYPE.TestWithPDL&&automationType==1)
                 {
                     string errMsg = "";
@@ -2322,7 +2323,89 @@ namespace UIOperateInterleaver
             }
         }
 
+        /// <summary>
+        /// 调节/测试扫描成功后落盘共享光谱，并向自动化发送 DATA;READY（失败不阻断流程）。
+        /// </summary>
+        private void TryPublishSpectrumShare(ScanDetail scanInfo)
+        {
+            try
+            {
+                if (scanInfo == null)
+                    return;
+                if (scanErrorMsg != null && scanErrorMsg.Length > 0)
+                    return;
+                if (isStopScan)
+                    return;
+                if (scanInfo.ScanType != SCANTYPE.TestWithNoPDL && scanInfo.ScanType != SCANTYPE.TestWithPDL)
+                    return;
+                if (uiVariable == null || string.IsNullOrEmpty(uiVariable.SN))
+                    return;
+                if (portResData == null || scanPowermeterCount <= 0)
+                    return;
 
+                string dataKind = scanInfo.ScanType == SCANTYPE.TestWithPDL ? "result" : "process";
+                string scanType = scanInfo.ScanType == SCANTYPE.TestWithPDL ? "PDL" : "NOPDL";
+                bool useAve = false;
+                if (!string.IsNullOrEmpty(convertAlgorithm))
+                    useAve = convertAlgorithm.ToUpper() == ConvertAlgorithm.Ave.GetAdditional().ToUpper();
+
+                double[] shifts = specialShiftsDic != null ? specialShiftsDic.Values.ToArray() : new double[0];
+                double[] maxIls = portMaxILDic != null ? portMaxILDic.Values.ToArray() : new double[0];
+                double[] fsrs = (portFSRDic != null && portFSRDic.Count > 0) ? portFSRDic.Values.ToArray() : new double[0];
+                Dictionary<string, double> minIso = new Dictionary<string, double>();
+                if (portMinISODic != null)
+                {
+                    foreach (KeyValuePair<string, double> kv in portMinISODic)
+                        minIso[kv.Key] = kv.Value;
+                }
+
+                string testProcess = mainInfo != null ? mainInfo.TestProcess : "";
+                var req = new SpectrumSharePublisher.PublishRequest
+                {
+                    ShareRoot = TasRuntimeConfig.GetSpectrumShareRoot(),
+                    TestProcess = testProcess,
+                    Sn = uiVariable.SN,
+                    Port = scanInfo.Port,
+                    ScanType = scanType,
+                    DataKind = dataKind,
+                    PortResData = portResData,
+                    PmCount = scanPowermeterCount,
+                    UseAveAlgorithm = useAve,
+                    Shifts = shifts,
+                    MaxILs = maxIls,
+                    Fsrs = fsrs,
+                    MinIsoByPort = minIso
+                };
+
+                SpectrumSharePublisher.PublishResult published = SpectrumSharePublisher.Publish(req);
+                if (!published.Ok)
+                {
+                    CommonFunction.WriteLog(string.Format(
+                        "Spectrum share publish skipped/fail SN={0} kind={1}: {2}",
+                        uiVariable.SN, dataKind, published.ErrorMessage ?? ""));
+                    return;
+                }
+
+                CommonFunction.WriteLog(string.Format(
+                    "Spectrum share published SN={0} kind={1} dir={2}",
+                    uiVariable.SN, dataKind, published.DatasetDir));
+
+                if (automationType == 1 && cltSocket != null)
+                {
+                    string ready = SpectrumSharePublisher.BuildDataReadyLine(
+                        uiVariable.SN, dataKind, scanType, published.DatasetDir);
+                    string sockErr = "";
+                    if (!cltSocket.SendData(ready, ref sockErr))
+                    {
+                        CommonFunction.WriteLog("DATA;READY send fail: " + sockErr);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                CommonFunction.WriteLog("TryPublishSpectrumShare: " + ex);
+            }
+        }
 
         private void UpdateSpecialParam(int nPort)
         {

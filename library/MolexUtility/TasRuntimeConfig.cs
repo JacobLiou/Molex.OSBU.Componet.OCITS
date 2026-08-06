@@ -45,5 +45,33 @@ namespace MolexUtility
             string flag = Path.Combine(Environment.CurrentDirectory, "set", "RtOnlyTest.txt");
             return File.Exists(flag);
         }
+
+        /// <summary>
+        /// 光谱调节共享落盘根目录：读取 set\SpectrumShareRoot.txt 第一行非空路径（# 行为注释）；
+        /// 同机推荐 D:\ITL_SpectrumShare；缺省为 {CurrentDirectory}\SpectrumShare。
+        /// </summary>
+        public static string GetSpectrumShareRoot()
+        {
+            string cfg = Path.Combine(Environment.CurrentDirectory, "set", "SpectrumShareRoot.txt");
+            try
+            {
+                if (File.Exists(cfg))
+                {
+                    foreach (string line in File.ReadAllLines(cfg))
+                    {
+                        if (string.IsNullOrWhiteSpace(line))
+                            continue;
+                        string trimmed = line.Trim();
+                        if (trimmed.StartsWith("#"))
+                            continue;
+                        return trimmed;
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return Path.Combine(Environment.CurrentDirectory, "SpectrumShare");
+        }
     }
 }
