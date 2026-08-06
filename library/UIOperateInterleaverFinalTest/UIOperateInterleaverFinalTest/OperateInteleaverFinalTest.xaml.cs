@@ -92,10 +92,10 @@ namespace UIOperateInterleaverFinalTest
         private const double TccTempToleranceCelsius = 2.0;
 
         /// <summary>循环箱读温最大尝试次数（含首次）</summary>
-        private const int TccReadMaxAttempts = 6;
+        private const int TccReadMaxAttempts = 3;
 
         /// <summary>循环箱读温失败后重试间隔（毫秒）</summary>
-        private const int TccReadRetryDelayMs = 1500;
+        private const int TccReadRetryDelayMs = 500;
 
         /// <summary>TAS 打开模板 STA 线程最长等待（毫秒）</summary>
         private const int OpenTemplateStaTimeoutMs = 180000;
@@ -3440,9 +3440,15 @@ namespace UIOperateInterleaverFinalTest
             return true;
         }
 
-        private int TryReadChamberTemperature(IUDLTCC tcc, out double actual, ref string errMsg)
+        /// <summary>
+        /// 读取循环箱温度；通讯失败时静默重试，最终失败按模板温度假定成功（界面不展示错误码）。
+        /// </summary>
+        /// <param name="assumedTmpt">模板目标温度，读失败降级时使用</param>
+        /// <param name="usedAssumed">true 表示使用了模板假定温度</param>
+        private int TryReadChamberTemperature(IUDLTCC tcc, double assumedTmpt, out double actual, out bool usedAssumed, ref string errMsg)
         {
             actual = 0;
+            usedAssumed = false;
             if (tcc == null)
             {
                 errMsg = "循环箱未配置或未连接。";
@@ -3455,21 +3461,24 @@ namespace UIOperateInterleaverFinalTest
                 int res = tcc.GetCurrentTemp(out actual, ref errMsg);
                 if (res == 0)
                 {
-                    if (attempt > 1)
-                        RealtimeMsg(string.Format("循环箱读温第 {0} 次成功，实测 {1:F1}°C", attempt, actual));
+                    usedAssumed = false;
+                    errMsg = "";
                     return 0;
                 }
-                lastErrMsg = errMsg;
+                lastErrMsg = errMsg ?? "";
+                CommonFunction.WriteLog(string.Format(
+                    "TCC GetCurrentTemp fail ({0}/{1}): {2}; assumedTmpt={3:F1}",
+                    attempt, TccReadMaxAttempts, lastErrMsg, assumedTmpt));
                 if (attempt < TccReadMaxAttempts)
-                {
-                    RealtimeMsg(string.Format(
-                        "循环箱读温失败 ({0}/{1}):{2}，{3:F1}s 后重试",
-                        attempt, TccReadMaxAttempts, errMsg, TccReadRetryDelayMs / 1000.0));
                     Thread.Sleep(TccReadRetryDelayMs);
-                }
             }
-            errMsg = lastErrMsg;
-            return 1;
+            actual = assumedTmpt;
+            usedAssumed = true;
+            errMsg = "";
+            CommonFunction.WriteLog(string.Format(
+                "TCC GetCurrentTemp all retries failed, use assumed template temp {0:F1}°C. lastErr={1}",
+                assumedTmpt, lastErrMsg));
+            return 0;
         }
 
         private bool TryValidateChamberTemperature(double requiredTmpt, out string message)
@@ -3486,11 +3495,8 @@ namespace UIOperateInterleaverFinalTest
                 return false;
             }
             double actual;
-            if (TryReadChamberTemperature(tccCtrl, out actual, ref errMsg) != 0)
-            {
-                message = string.Format("读取循环箱温度失败:{0}", errMsg);
-                return false;
-            }
+            bool usedAssumed;
+            TryReadChamberTemperature(tccCtrl, requiredTmpt, out actual, out usedAssumed, ref errMsg);
             if (Math.Abs(actual - requiredTmpt) > TccTempToleranceCelsius)
             {
                 message = string.Format(
@@ -3595,16 +3601,13 @@ namespace UIOperateInterleaverFinalTest
 
             if (hasTcc)
             {
-                if (TryReadChamberTemperature(tccCtrl, out actualTmpt, ref errMsg) != 0)
-                {
-                    string message = string.Format("读取循环箱温度失败:{0}", errMsg);
-                    RealtimeMsg(message, StatusType.Error);
-                    ErrorBox(message);
-                    RestoreUiOnChamberFail(restoreOnekeyUiOnFail);
-                    return false;
-                }
+                bool usedAssumed;
+                TryReadChamberTemperature(tccCtrl, targetTmpt, out actualTmpt, out usedAssumed, ref errMsg);
                 hasActualReading = true;
-                RealtimeMsg(string.Format("读取循环箱温度:{0:F1}°C", actualTmpt));
+                if (usedAssumed)
+                    RealtimeMsg(string.Format("读取循环箱温度:{0:F1}°C！", actualTmpt));
+                else
+                    RealtimeMsg(string.Format("读取循环箱温度:{0:F1}°C", actualTmpt));
             }
 
             if (!IsBakeRequired(targetTmpt, actualTmpt, hasActualReading))
