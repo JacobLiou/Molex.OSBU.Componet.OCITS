@@ -29,5 +29,13 @@ namespace MolexUtility.Device
         /// <param name="errMsg">出错信息</param>
         /// <returns>0--成功，1--失败，其他--奔溃</returns>
         int SetTempSetpoint(double setTempr, ref string errMsg);
+
+        /// <summary>
+        /// 读取循环箱设定温度（setpoint）
+        /// </summary>
+        /// <param name="getTempr">设定温度</param>
+        /// <param name="errMsg">出错信息</param>
+        /// <returns>0--成功，1--失败，其他--奔溃</returns>
+        int GetTempSetpoint(out double getTempr, ref string errMsg);
     }
 }
