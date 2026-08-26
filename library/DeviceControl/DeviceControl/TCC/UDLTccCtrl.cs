@@ -10,6 +10,18 @@ namespace DeviceControl
 {
     public class UDLTccCtrl:IUDLTCC
     {
+        private sealed class StringRef
+        {
+            public string Value;
+        }
+
+        private sealed class TempHolder
+        {
+            public int Res;
+            public double Temp;
+            public string Err;
+        }
+
         /// <summary>
         /// 设备GUID
         /// </summary>
@@ -22,6 +34,26 @@ namespace DeviceControl
         /// <param name="errMsg">出错信息</param>
         /// <returns>0--成功，1--失败，其他--奔溃</returns>
         public int GetCurrentTemp(out double getTempr, ref string errMsg)
+        {
+            if (UdlStaHost.IsOnHostThread())
+                return GetCurrentTempImpl(out getTempr, ref errMsg);
+
+            var holder = new TempHolder { Err = errMsg };
+            int res = UdlStaHost.Invoke(() =>
+            {
+                double temp;
+                string localErr = holder.Err;
+                holder.Res = GetCurrentTempImpl(out temp, ref localErr);
+                holder.Temp = temp;
+                holder.Err = localErr;
+                return holder.Res;
+            });
+            getTempr = holder.Temp;
+            errMsg = holder.Err;
+            return res;
+        }
+
+        private int GetCurrentTempImpl(out double getTempr, ref string errMsg)
         {
             getTempr = CommonFunction.GetDefaultValue();
             if (DeviceHandle.tccCtrl == null)
@@ -43,6 +75,17 @@ namespace DeviceControl
         /// <param name="errMsg">出错信息</param>
         /// <returns>0--成功，1--失败，其他--奔溃</returns>
         public int SetTempSetpoint(double setTempr, ref string errMsg)
+        {
+            if (UdlStaHost.IsOnHostThread())
+                return SetTempSetpointImpl(setTempr, ref errMsg);
+
+            var errRef = new StringRef { Value = errMsg };
+            int res = UdlStaHost.Invoke(() => SetTempSetpointImpl(setTempr, ref errRef.Value));
+            errMsg = errRef.Value;
+            return res;
+        }
+
+        private int SetTempSetpointImpl(double setTempr, ref string errMsg)
         {
             if (DeviceHandle.tccCtrl == null)
             {
@@ -66,6 +109,26 @@ namespace DeviceControl
         /// 读取循环箱设定温度（setpoint）
         /// </summary>
         public int GetTempSetpoint(out double getTempr, ref string errMsg)
+        {
+            if (UdlStaHost.IsOnHostThread())
+                return GetTempSetpointImpl(out getTempr, ref errMsg);
+
+            var holder = new TempHolder { Err = errMsg };
+            int res = UdlStaHost.Invoke(() =>
+            {
+                double temp;
+                string localErr = holder.Err;
+                holder.Res = GetTempSetpointImpl(out temp, ref localErr);
+                holder.Temp = temp;
+                holder.Err = localErr;
+                return holder.Res;
+            });
+            getTempr = holder.Temp;
+            errMsg = holder.Err;
+            return res;
+        }
+
+        private int GetTempSetpointImpl(out double getTempr, ref string errMsg)
         {
             getTempr = CommonFunction.GetDefaultValue();
             if (DeviceHandle.tccCtrl == null)

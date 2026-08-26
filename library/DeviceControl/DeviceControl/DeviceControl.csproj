@@ -83,6 +83,7 @@
     <Compile Include="Automation\Automation.cs" />
     <Compile Include="Current\Current6517.cs" />
     <Compile Include="DeviceHandle.cs" />
+    <Compile Include="UdlStaHost.cs" />
     <Compile Include="FSTPScan\UDLFSTPScan.cs" />
     <Compile Include="Interleaver\CDScan.cs" />
     <Compile Include="Interleaver\FSTPScan.cs" />
