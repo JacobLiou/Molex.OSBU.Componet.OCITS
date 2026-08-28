@@ -91,23 +91,23 @@ namespace UIOperateInterleaverFinalTest
         /// <summary>循环箱实测温度与模板要求温度的允许偏差（°C）</summary>
         private const double TccTempToleranceCelsius = 2.0;
 
-        /// <summary>开扫前连续读温次数</summary>
-        private const int TccStableReadCount = 3;
-
-        /// <summary>连续读温间隔（毫秒）</summary>
-        private const int TccStableReadIntervalMs = 500;
-
-        /// <summary>连续读温允许极差（°C）</summary>
-        private const double TccStableMaxSpreadCelsius = 1.0;
-
-        /// <summary>设点回读允许偏差（°C）</summary>
-        private const double TccSetpointToleranceCelsius = 0.5;
-
         /// <summary>循环箱读温最大尝试次数（含首次）</summary>
-        private const int TccReadMaxAttempts = 3;
+        private const int TccReadMaxAttempts = 6;
 
         /// <summary>循环箱读温失败后重试间隔（毫秒）</summary>
-        private const int TccReadRetryDelayMs = 1000;
+        private const int TccReadRetryDelayMs = 1500;
+
+        /// <summary>操作员选「否=重试」后等待 UDL/通讯恢复再读（毫秒）</summary>
+        private const int TccOperatorRetryCooldownMs = 2500;
+
+        /// <summary>操作员重试退避上限（毫秒）</summary>
+        private const int TccOperatorRetryCooldownMaxMs = 8000;
+
+        /// <summary>循环箱设温最大尝试次数（含首次）</summary>
+        private const int TccSetpointMaxAttempts = 3;
+
+        /// <summary>循环箱设温失败后重试间隔（毫秒）</summary>
+        private const int TccSetpointRetryDelayMs = 1000;
 
         /// <summary>循环箱读温/校验操作员决策</summary>
         private enum TccOperatorDecision
@@ -119,7 +119,7 @@ namespace UIOperateInterleaverFinalTest
 
         /// <summary>
         /// 本会话内操作员已对某目标温点过「通过」的集合（按 0.1°C 量化）。
-        /// 同目标温后续读温/校验失败自动放行，减少 16SN 反复弹框。
+        /// 仅用于读温/设温/开扫前校验的通讯失败自动放行；不用于跳过变温拷温（见 IsBakeRequired）。
         /// </summary>
         private readonly HashSet<int> tccOperatorPassTempKeys = new HashSet<int>();
 
@@ -188,6 +188,33 @@ namespace UIOperateInterleaverFinalTest
         /// 烤温时间确认后台线程
         /// </summary>
         private BackgroundWorker bakeTimeCheckBK;
+
+        /// <summary>循环箱读温/设温准备（避免堵 UI）</summary>
+        private BackgroundWorker chamberPrepBK;
+
+        private enum ChamberPrepOutcome
+        {
+            NeedScan = 0,
+            NeedBake = 1,
+            Aborted = 2,
+            Failed = 3
+        }
+
+        private sealed class ChamberPrepRequest
+        {
+            public double TargetTmpt;
+            public double SoakMinutes;
+            public bool RestoreOnekeyUiOnFail;
+        }
+
+        private sealed class ChamberPrepResult
+        {
+            public ChamberPrepOutcome Outcome;
+            public double TargetTmpt;
+            public double SoakMinutes;
+            public bool RestoreOnekeyUiOnFail;
+            public string Message;
+        }
 
         /// <summary>
         /// 记录计算的过程数据，用于port参数计算
@@ -310,6 +337,17 @@ namespace UIOperateInterleaverFinalTest
         /// </summary>
         private string scanErrorMsg = "";
         private int lastScanResCode = 0;
+
+        /// <summary>独立等待小窗（快扫/烤温共用；独立 HWND 可盖住 WindowsFormsHost）</summary>
+        private enum WaitOverlayMode { None, Scan, Bake }
+        private Window waitOverlayWindow;
+        private TextBlock txtWaitTitle;
+        private TextBlock windowScanWaitDetail;
+        private TextBlock txtWaitCountdown;
+        private ProgressBar waitProgressBar;
+        private WaitOverlayMode waitOverlayMode = WaitOverlayMode.None;
+        private int bakeOverlayTotalSeconds;
+        private bool forceCloseWaitOverlay;
 
         /// <summary>
         /// 用于显示的模板处理类
@@ -575,17 +613,17 @@ namespace UIOperateInterleaverFinalTest
         {
             int time = e.ProgressPercentage;
             time = time / 1000;
-            if(time==0)
+            if (time == 0)
             {
                 curBakeStatus = BakeStatus.BakeComplete;
+                HideWaitOverlay();
                 TemptRemainTime.Text = "烤温完成";
                 UIControl.IsClearSNVisiable = Visibility.Visible;
                 DoScanOnBK();
             }
             else
-            {               
-                string timeShow = string.Format("{0}:{1:D2}:{2:D2}", "00",Convert.ToInt32(time/60),time%60);
-                TemptRemainTime.Text = timeShow;
+            {
+                UpdateBakeWaitOverlay(time, bakeOverlayTotalSeconds);
             }
         }
 
@@ -1698,6 +1736,9 @@ namespace UIOperateInterleaverFinalTest
                         int portIndex = refAssist.PortIndex;
                         SetIsScanFinished(false);
                         RealtimeMsg(prompt);
+                        int snOrdinal = Math.Max(1, refAssist.ProductIndex);
+                        int snTotal = Math.Max(1, allProductControl.Count);
+                        ShowScanWaitOverlay(string.Format("归零 SN {0}/{1}", snOrdinal, snTotal));
                         BackgroundWorker bkPM = new BackgroundWorker();
                         bkPM.DoWork += Scan_DoWork;
                         bkPM.RunWorkerCompleted += Scan_RunWorkerCompleted;
@@ -2777,6 +2818,380 @@ namespace UIOperateInterleaverFinalTest
         }
 
         /// <summary>
+        /// 独立等待小窗：盖住 WindowsFormsHost（曲线/底表），非模态、不 ShowDialog。
+        /// </summary>
+        private Window EnsureWaitOverlayWindow()
+        {
+            if (waitOverlayWindow != null)
+                return waitOverlayWindow;
+
+            waitOverlayWindow = new Window
+            {
+                WindowStyle = WindowStyle.None,
+                AllowsTransparency = true,
+                Background = Brushes.Transparent,
+                ShowInTaskbar = false,
+                ResizeMode = ResizeMode.NoResize,
+                SizeToContent = SizeToContent.WidthAndHeight,
+                WindowStartupLocation = WindowStartupLocation.Manual,
+                ShowActivated = false,
+                Focusable = false,
+                Title = "等待提示"
+            };
+
+            var card = new Border
+            {
+                Background = Brushes.White,
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(40, 32, 40, 32),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0x2F, 0x6F, 0x6F)),
+                BorderThickness = new Thickness(2),
+                MinWidth = 360
+            };
+
+            var stack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
+            txtWaitTitle = new TextBlock
+            {
+                Text = "快扫进行中",
+                FontSize = 22,
+                FontWeight = FontWeights.Bold,
+                Foreground = Brushes.Black,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+            stack.Children.Add(txtWaitTitle);
+
+            windowScanWaitDetail = new TextBlock
+            {
+                Text = "SN 1/1",
+                FontSize = 16,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(0x00, 0x66, 0x99)),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            stack.Children.Add(windowScanWaitDetail);
+
+            txtWaitCountdown = new TextBlock
+            {
+                Text = "00:00:00",
+                FontSize = 56,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(Color.FromRgb(0x1A, 0x5F, 0x7A)),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 4, 0, 12),
+                Visibility = Visibility.Collapsed
+            };
+            stack.Children.Add(txtWaitCountdown);
+
+            stack.Children.Add(new TextBlock
+            {
+                Text = "请稍候…",
+                FontSize = 13,
+                Foreground = new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x44)),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 0, 0, 14)
+            });
+
+            waitProgressBar = new ProgressBar
+            {
+                Height = 12,
+                Width = 280,
+                IsIndeterminate = true,
+                Minimum = 0,
+                Maximum = 100,
+                Value = 0,
+                Foreground = new SolidColorBrush(Color.FromRgb(0x3C, 0xB3, 0x71)),
+                Background = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0)),
+                BorderThickness = new Thickness(0)
+            };
+            stack.Children.Add(waitProgressBar);
+            card.Child = stack;
+
+            // 外圈半透明衬底，增强可见性（非整窗遮罩，主窗仍可点周围区域）
+            var frame = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(0xAA, 0x20, 0x20, 0x20)),
+                Padding = new Thickness(28),
+                CornerRadius = new CornerRadius(10),
+                Child = card
+            };
+            waitOverlayWindow.Content = frame;
+
+            waitOverlayWindow.Closing += (s, e) =>
+            {
+                if (!forceCloseWaitOverlay)
+                {
+                    e.Cancel = true;
+                    waitOverlayWindow.Hide();
+                    waitOverlayMode = WaitOverlayMode.None;
+                }
+            };
+
+            return waitOverlayWindow;
+        }
+
+        private void HookOwnerForWaitOverlay(Window owner)
+        {
+            if (owner == null || waitOverlayWindow == null)
+                return;
+            owner.LocationChanged -= Owner_LocationChangedForWait;
+            owner.SizeChanged -= Owner_SizeChangedForWait;
+            owner.LocationChanged += Owner_LocationChangedForWait;
+            owner.SizeChanged += Owner_SizeChangedForWait;
+        }
+
+        private void Owner_LocationChangedForWait(object sender, EventArgs e)
+        {
+            if (waitOverlayWindow != null && waitOverlayWindow.IsVisible)
+                CenterWaitOverlayOnOwner();
+        }
+
+        private void Owner_SizeChangedForWait(object sender, SizeChangedEventArgs e)
+        {
+            if (waitOverlayWindow != null && waitOverlayWindow.IsVisible)
+                CenterWaitOverlayOnOwner();
+        }
+
+        private void CenterWaitOverlayOnOwner()
+        {
+            if (waitOverlayWindow == null)
+                return;
+            Window owner = waitOverlayWindow.Owner ?? Window.GetWindow(this);
+            if (owner == null)
+                return;
+
+            waitOverlayWindow.UpdateLayout();
+            double w = waitOverlayWindow.ActualWidth;
+            double h = waitOverlayWindow.ActualHeight;
+            if (w <= 0 || h <= 0)
+            {
+                waitOverlayWindow.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                w = waitOverlayWindow.DesiredSize.Width;
+                h = waitOverlayWindow.DesiredSize.Height;
+            }
+
+            try
+            {
+                Point ownerCenterScreen = owner.PointToScreen(new Point(owner.ActualWidth / 2.0, owner.ActualHeight / 2.0));
+                PresentationSource src = PresentationSource.FromVisual(owner);
+                if (src != null && src.CompositionTarget != null)
+                {
+                    Point ownerCenterDip = src.CompositionTarget.TransformFromDevice.Transform(ownerCenterScreen);
+                    waitOverlayWindow.Left = ownerCenterDip.X - w / 2.0;
+                    waitOverlayWindow.Top = ownerCenterDip.Y - h / 2.0;
+                }
+                else
+                {
+                    waitOverlayWindow.Left = owner.Left + (owner.ActualWidth - w) / 2.0;
+                    waitOverlayWindow.Top = owner.Top + (owner.ActualHeight - h) / 2.0;
+                }
+            }
+            catch
+            {
+                waitOverlayWindow.Left = owner.Left + Math.Max(0, (owner.ActualWidth - w) / 2.0);
+                waitOverlayWindow.Top = owner.Top + Math.Max(0, (owner.ActualHeight - h) / 2.0);
+            }
+        }
+
+        private void ShowWaitOverlayWindow()
+        {
+            Window owner = Window.GetWindow(this);
+            Window w = EnsureWaitOverlayWindow();
+            if (owner != null)
+            {
+                w.Owner = owner;
+                HookOwnerForWaitOverlay(owner);
+            }
+            if (!w.IsVisible)
+                w.Show();
+            CenterWaitOverlayOnOwner();
+        }
+
+        private static string FormatBakeCountdown(int totalSeconds)
+        {
+            if (totalSeconds < 0)
+                totalSeconds = 0;
+            int h = totalSeconds / 3600;
+            int m = (totalSeconds % 3600) / 60;
+            int s = totalSeconds % 60;
+            return string.Format("{0:D2}:{1:D2}:{2:D2}", h, m, s);
+        }
+
+        private void ApplyScanWaitMode(string detail)
+        {
+            waitOverlayMode = WaitOverlayMode.Scan;
+            if (txtWaitTitle != null)
+                txtWaitTitle.Text = "快扫进行中";
+            if (windowScanWaitDetail != null)
+                windowScanWaitDetail.Text = string.IsNullOrEmpty(detail) ? "SN ?" : detail;
+            if (txtWaitCountdown != null)
+                txtWaitCountdown.Visibility = Visibility.Collapsed;
+            if (waitProgressBar != null)
+            {
+                waitProgressBar.IsIndeterminate = false;
+                waitProgressBar.IsIndeterminate = true;
+                waitProgressBar.Value = 0;
+            }
+        }
+
+        private void ApplyBakeWaitMode(double targetTmpt, int totalSeconds)
+        {
+            waitOverlayMode = WaitOverlayMode.Bake;
+            bakeOverlayTotalSeconds = Math.Max(1, totalSeconds);
+            if (txtWaitTitle != null)
+                txtWaitTitle.Text = "烤温倒计时";
+            if (windowScanWaitDetail != null)
+                windowScanWaitDetail.Text = string.Format("目标 {0:F1}°C", targetTmpt);
+            if (txtWaitCountdown != null)
+            {
+                txtWaitCountdown.Visibility = Visibility.Visible;
+                txtWaitCountdown.Text = FormatBakeCountdown(bakeOverlayTotalSeconds);
+            }
+            if (waitProgressBar != null)
+            {
+                waitProgressBar.IsIndeterminate = false;
+                waitProgressBar.Minimum = 0;
+                waitProgressBar.Maximum = bakeOverlayTotalSeconds;
+                waitProgressBar.Value = 0;
+            }
+        }
+
+        /// <summary>
+        /// 非模态快扫提示：独立小窗 + SN 进度 + 不确定进度条。
+        /// </summary>
+        private void ShowScanWaitOverlay(string detail)
+        {
+            Action apply = () =>
+            {
+                ShowWaitOverlayWindow();
+                ApplyScanWaitMode(detail);
+                CenterWaitOverlayOnOwner();
+            };
+            if (Dispatcher.CheckAccess())
+                apply();
+            else
+                Dispatcher.BeginInvoke(apply);
+        }
+
+        /// <summary>
+        /// 烤温开始：独立小窗大号倒计时。
+        /// </summary>
+        private void ShowBakeWaitOverlay(double targetTmpt, int totalSeconds)
+        {
+            Action apply = () =>
+            {
+                ShowWaitOverlayWindow();
+                ApplyBakeWaitMode(targetTmpt, totalSeconds);
+                CenterWaitOverlayOnOwner();
+                string timeShow = FormatBakeCountdown(Math.Max(0, totalSeconds));
+                if (TemptRemainTime != null)
+                    TemptRemainTime.Text = timeShow;
+            };
+            if (Dispatcher.CheckAccess())
+                apply();
+            else
+                Dispatcher.BeginInvoke(apply);
+        }
+
+        /// <summary>
+        /// 烤温每秒刷新：大号倒计时 + 进度条 + 左侧小字。
+        /// </summary>
+        private void UpdateBakeWaitOverlay(int remainSeconds, int totalSeconds)
+        {
+            Action apply = () =>
+            {
+                if (remainSeconds < 0)
+                    remainSeconds = 0;
+                string timeShow = FormatBakeCountdown(remainSeconds);
+                if (TemptRemainTime != null)
+                    TemptRemainTime.Text = timeShow;
+
+                if (waitOverlayMode != WaitOverlayMode.Bake || waitOverlayWindow == null || !waitOverlayWindow.IsVisible)
+                    return;
+                if (txtWaitCountdown != null)
+                    txtWaitCountdown.Text = timeShow;
+                if (waitProgressBar != null && totalSeconds > 0)
+                {
+                    waitProgressBar.IsIndeterminate = false;
+                    waitProgressBar.Maximum = totalSeconds;
+                    double done = totalSeconds - remainSeconds;
+                    if (done < 0)
+                        done = 0;
+                    if (done > totalSeconds)
+                        done = totalSeconds;
+                    waitProgressBar.Value = done;
+                }
+            };
+            if (Dispatcher.CheckAccess())
+                apply();
+            else
+                Dispatcher.BeginInvoke(apply);
+        }
+
+        /// <summary>
+        /// 隐藏等待小窗（快扫结束 / 烤温结束 / 清列表）。
+        /// </summary>
+        private void HideWaitOverlay()
+        {
+            Action apply = () =>
+            {
+                if (waitOverlayWindow != null && waitOverlayWindow.IsVisible)
+                    waitOverlayWindow.Hide();
+                waitOverlayMode = WaitOverlayMode.None;
+            };
+            if (Dispatcher.CheckAccess())
+                apply();
+            else
+                Dispatcher.BeginInvoke(apply);
+        }
+
+        private void HideScanWaitOverlay()
+        {
+            HideWaitOverlay();
+        }
+
+        private void CloseWaitOverlayWindow()
+        {
+            Action apply = () =>
+            {
+                if (waitOverlayWindow == null)
+                    return;
+                Window owner = waitOverlayWindow.Owner;
+                if (owner != null)
+                {
+                    owner.LocationChanged -= Owner_LocationChangedForWait;
+                    owner.SizeChanged -= Owner_SizeChangedForWait;
+                }
+                forceCloseWaitOverlay = true;
+                try
+                {
+                    waitOverlayWindow.Close();
+                }
+                finally
+                {
+                    forceCloseWaitOverlay = false;
+                    waitOverlayWindow = null;
+                    txtWaitTitle = null;
+                    windowScanWaitDetail = null;
+                    txtWaitCountdown = null;
+                    waitProgressBar = null;
+                    waitOverlayMode = WaitOverlayMode.None;
+                }
+            };
+            if (Dispatcher.CheckAccess())
+                apply();
+            else
+                Dispatcher.BeginInvoke(apply);
+        }
+
+        /// <summary>
+        /// 开启扫描background线程
+        /// </summary>
+        /// <summary>
+        /// 开启扫描background线程
+        /// </summary>
+        /// <summary>
         /// 开启扫描background线程
         /// </summary>
         /// <param name="scanType">扫描类型</param>
@@ -2807,6 +3222,7 @@ namespace UIOperateInterleaverFinalTest
                 int snTotal = Math.Max(1, allProductControl.Count);
                 string scanKind = scanDetailInfo != null ? scanDetailInfo.ScanType.ToString() : "";
                 RealtimeMsg(string.Format("扫描中 SN {0}/{1} ({2})。。。", snOrdinal, snTotal, scanKind));
+                ShowScanWaitOverlay(string.Format("SN {0}/{1}", snOrdinal, snTotal));
                 BackgroundWorker bkScan = new BackgroundWorker();
                 bkScan.DoWork += Scan_DoWork;
                 bkScan.RunWorkerCompleted += Scan_RunWorkerCompleted;
@@ -3387,6 +3803,8 @@ namespace UIOperateInterleaverFinalTest
         /// <param name="e"></param>
         private void Scan_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
         {
+            HideScanWaitOverlay();
+
             if (CurProductIndex >= 0 && CurProductIndex < AllProducts.Count)
             {
                 if (scanErrorMsg.Length > 0)
@@ -3529,6 +3947,11 @@ namespace UIOperateInterleaverFinalTest
         private bool TryBlockHighLowTempForRoomTempIl(out string message)
         {
             message = "";
+            if (TasRuntimeConfig.IsRoomTempIlGateDisabled())
+            {
+                CommonFunction.WriteLog("已跳过常温 MAXIL/MINIL 高低温闸门（set\\DisableRoomTempIlGate.txt）");
+                return false;
+            }
             string detail;
             if (!TryGetRoomTempMaxMinIlIssue(includeUntested: true, matchCurTestTmptOnly: false, out detail))
                 return false;
@@ -3554,6 +3977,8 @@ namespace UIOperateInterleaverFinalTest
 
         private bool TryAbortBatchForRoomTempIl()
         {
+            if (TasRuntimeConfig.IsRoomTempIlGateDisabled())
+                return false;
             if (!IsMultiSnSinglePortBatch() || batchTestAborted)
                 return false;
             if (!IsRoomTemperature(curTestTmpt))
@@ -3599,7 +4024,7 @@ namespace UIOperateInterleaverFinalTest
                     "TCC GetCurrentTemp fail ({0}/{1}): {2}",
                     attempt, TccReadMaxAttempts, lastErrMsg));
                 if (attempt < TccReadMaxAttempts)
-                    Thread.Sleep(TccReadRetryDelayMs);
+                    Thread.Sleep(TccReadRetryDelayMs * attempt);
             }
             errMsg = string.IsNullOrEmpty(lastErrMsg) ? "读取循环箱温度失败。" : lastErrMsg;
             actual = 0;
@@ -3607,13 +4032,142 @@ namespace UIOperateInterleaverFinalTest
         }
 
         /// <summary>
-        /// 三按钮：是=通过，否=重试，取消=终止。
+        /// 操作员选「重试」后等待通讯库恢复；避免立即连打 UDL 导致 0x00120091 等错误刷屏。
+        /// </summary>
+        private void WaitBeforeTccOperatorRetry(int operatorRetryRound, string actionHint)
+        {
+            int round = Math.Max(1, operatorRetryRound);
+            int delayMs = TccOperatorRetryCooldownMs + (round - 1) * 1000;
+            if (delayMs > TccOperatorRetryCooldownMaxMs)
+                delayMs = TccOperatorRetryCooldownMaxMs;
+            string hint = string.Format(
+                "循环箱通讯异常，{0:F1}s 后重试{1}（第 {2} 次）",
+                delayMs / 1000.0,
+                string.IsNullOrEmpty(actionHint) ? "读温" : actionHint,
+                round);
+            CommonFunction.WriteLog("TCC operator retry wait: " + hint);
+            UpdateChamberPrepStatus("通讯重试中…", hint);
+            Thread.Sleep(delayMs);
+        }
+
+        /// <summary>
+        /// 三按钮：是=通过，否=重试，取消=终止。可在后台线程调用（封送到 UI）。
         /// </summary>
         private static MessageBoxResult ShowTccOperatorConfirmDialog(string title, string detail)
         {
             string body = (detail ?? "") +
                 "\r\n\r\n请选择：\r\n[是] 通过 — 目视确认后强制放行\r\n[否] 重试 — 重新读取/校验\r\n[取消] 终止 — 停止测试";
             return MessageBox.Show(body, title, MessageBoxButton.YesNoCancel, MessageBoxImage.Warning);
+        }
+
+        private MessageBoxResult ShowTccOperatorConfirmDialogOnUi(string title, string detail)
+        {
+            if (Dispatcher.CheckAccess())
+                return ShowTccOperatorConfirmDialog(title, detail);
+            MessageBoxResult result = MessageBoxResult.Cancel;
+            Dispatcher.Invoke(new Action(() =>
+            {
+                result = ShowTccOperatorConfirmDialog(title, detail);
+            }));
+            return result;
+        }
+
+        private void UpdateChamberPrepStatus(string statusText, string realtimeMsg = null)
+        {
+            Action apply = () =>
+            {
+                if (!string.IsNullOrEmpty(statusText) && TemptRemainTime != null)
+                    TemptRemainTime.Text = statusText;
+                if (!string.IsNullOrEmpty(realtimeMsg))
+                    RealtimeMsg(realtimeMsg, StatusType.Normal);
+            };
+            if (Dispatcher.CheckAccess())
+                apply();
+            else
+                Dispatcher.Invoke(apply);
+        }
+
+        /// <summary>
+        /// 设温失败后：若实测已从上一温度朝目标方向变化，视为箱体已在升温/降温。
+        /// </summary>
+        private static bool IsChamberMovingTowardTarget(double targetTmpt, double actualTmpt, double fromTmpt)
+        {
+            if (Math.Abs(actualTmpt - targetTmpt) <= TccTempToleranceCelsius)
+                return true;
+            double span = targetTmpt - fromTmpt;
+            if (Math.Abs(span) < 0.5)
+                return Math.Abs(actualTmpt - targetTmpt) <= 5.0;
+            double progress = (actualTmpt - fromTmpt) / span;
+            // 2%：避免仅降 1°C（如 20→19）时被 5% 门槛误判为未降温
+            return progress > 0.02 && progress < 1.5;
+        }
+
+        /// <summary>
+        /// 设温；失败则看是否已在朝目标走，否则弹通过/重试/终止。
+        /// </summary>
+        private bool TrySetChamberSetpointWithOperatorConfirm(
+            IUDLTCC tcc, double targetTmpt, double fromTmpt, ref string errMsg)
+        {
+            int operatorRetryRound = 0;
+            while (true)
+            {
+                errMsg = "";
+                UpdateChamberPrepStatus(
+                    string.Format("设温中 {0:F0}°C", targetTmpt),
+                    string.Format("正在设置循环箱温度 {0:F1}°C…", targetTmpt));
+
+                if (TrySetChamberSetpoint(tcc, targetTmpt, ref errMsg))
+                    return true;
+
+                double actual = 0;
+                string readErr = "";
+                if (TryReadChamberTemperature(tcc, out actual, ref readErr) == 0
+                    && IsChamberMovingTowardTarget(targetTmpt, actual, fromTmpt))
+                {
+                    CommonFunction.WriteLog(string.Format(
+                        "TCC SetTempSetpoint fail but heating toward target: from={0:F1}, actual={1:F1}, target={2:F1}, err={3}",
+                        fromTmpt, actual, targetTmpt, errMsg));
+                    UpdateChamberPrepStatus(
+                        string.Format("已升温 {0:F1}°C", actual),
+                        string.Format("设温回报失败，但实测 {0:F1}°C 已朝 {1:F1}°C 变化，继续烤温。", actual, targetTmpt));
+                    errMsg = "";
+                    return true;
+                }
+
+                if (IsTccOperatorPassRemembered(targetTmpt))
+                {
+                    CommonFunction.WriteLog(string.Format(
+                        "TCC operator override remembered (set fail): target={0:F1}, err={1}",
+                        targetTmpt, errMsg));
+                    errMsg = "";
+                    return true;
+                }
+
+                string detail = string.Format(
+                    "循环箱设置温度失败。\r\n模板目标:{0:F1}°C\r\n原因:{1}\r\n{2}",
+                    targetTmpt,
+                    string.IsNullOrEmpty(errMsg) ? "通讯失败" : errMsg,
+                    string.IsNullOrEmpty(readErr)
+                        ? (actual != 0 ? string.Format("当前实测:{0:F1}°C", actual) : "")
+                        : ("读温:" + readErr));
+                MessageBoxResult choice = ShowTccOperatorConfirmDialogOnUi("循环箱设温失败", detail);
+                if (choice == MessageBoxResult.Yes)
+                {
+                    RememberTccOperatorPass(targetTmpt);
+                    CommonFunction.WriteLog(string.Format(
+                        "TCC operator override (set fail): target={0:F1}, err={1}", targetTmpt, errMsg));
+                    errMsg = "";
+                    return true;
+                }
+                if (choice == MessageBoxResult.Cancel)
+                {
+                    errMsg = string.IsNullOrEmpty(errMsg) ? "操作员终止设温。" : errMsg;
+                    return false;
+                }
+
+                operatorRetryRound++;
+                WaitBeforeTccOperatorRetry(operatorRetryRound, "设温");
+            }
         }
 
         /// <summary>
@@ -3624,6 +4178,7 @@ namespace UIOperateInterleaverFinalTest
         {
             actual = 0;
             hasActualReading = false;
+            int operatorRetryRound = 0;
             while (true)
             {
                 errMsg = "";
@@ -3646,8 +4201,9 @@ namespace UIOperateInterleaverFinalTest
                 string detail = string.Format(
                     "无法读取循环箱温度。\r\n模板目标:{0:F1}°C\r\n原因:{1}",
                     targetTmpt, string.IsNullOrEmpty(errMsg) ? "通讯失败" : errMsg);
-                RealtimeMsg(detail, StatusType.Error);
-                MessageBoxResult choice = ShowTccOperatorConfirmDialog("循环箱读温失败", detail);
+                if (operatorRetryRound == 0)
+                    UpdateChamberPrepStatus(null, detail);
+                MessageBoxResult choice = ShowTccOperatorConfirmDialogOnUi("循环箱读温失败", detail);
                 if (choice == MessageBoxResult.Yes)
                 {
                     RememberTccOperatorPass(targetTmpt);
@@ -3659,11 +4215,14 @@ namespace UIOperateInterleaverFinalTest
                 }
                 if (choice == MessageBoxResult.Cancel)
                     return TccOperatorDecision.Abort;
+
+                operatorRetryRound++;
+                WaitBeforeTccOperatorRetry(operatorRetryRound, "读温");
             }
         }
 
         /// <summary>
-        /// 开扫前硬校验：连续多次一致实测。不弹框。
+        /// 开扫前硬校验：通讯可重试；读到一次成功实测并与模板比对即可。不弹框。
         /// </summary>
         private bool TryValidateChamberTemperatureOnce(double requiredTmpt, out string message)
         {
@@ -3679,42 +4238,20 @@ namespace UIOperateInterleaverFinalTest
                 return false;
             }
 
-            double[] samples = new double[TccStableReadCount];
-            for (int i = 0; i < TccStableReadCount; i++)
-            {
-                if (i > 0)
-                    Thread.Sleep(TccStableReadIntervalMs);
-                double actual;
-                if (TryReadChamberTemperature(tccCtrl, out actual, ref errMsg) != 0)
-                {
-                    message = string.Format(
-                        "循环箱温度校验失败（第{0}/{1}次读温）。\r\n模板要求:{2:F1}°C\r\n原因:{3}",
-                        i + 1, TccStableReadCount, requiredTmpt,
-                        string.IsNullOrEmpty(errMsg) ? "通讯失败" : errMsg);
-                    return false;
-                }
-                samples[i] = actual;
-                if (Math.Abs(actual - requiredTmpt) > TccTempToleranceCelsius)
-                {
-                    message = string.Format(
-                        "循环箱温度不符合模板要求，不能测试。\r\n模板要求:{0:F1}°C\r\n当前实测:{1:F1}°C\r\n允许偏差:±{2:F1}°C",
-                        requiredTmpt, actual, TccTempToleranceCelsius);
-                    return false;
-                }
-            }
-
-            double min = samples[0];
-            double max = samples[0];
-            for (int i = 1; i < samples.Length; i++)
-            {
-                if (samples[i] < min) min = samples[i];
-                if (samples[i] > max) max = samples[i];
-            }
-            if ((max - min) > TccStableMaxSpreadCelsius)
+            double actual;
+            if (TryReadChamberTemperature(tccCtrl, out actual, ref errMsg) != 0)
             {
                 message = string.Format(
-                    "循环箱温度读数不稳定，不能测试。\r\n模板要求:{0:F1}°C\r\n三次实测:[{1:F1}, {2:F1}, {3:F1}]\r\n极差:{4:F1}°C（允许≤{5:F1}°C）",
-                    requiredTmpt, samples[0], samples[1], samples[2], max - min, TccStableMaxSpreadCelsius);
+                    "循环箱温度校验失败。\r\n模板要求:{0:F1}°C\r\n原因:{1}",
+                    requiredTmpt,
+                    string.IsNullOrEmpty(errMsg) ? "通讯失败" : errMsg);
+                return false;
+            }
+            if (Math.Abs(actual - requiredTmpt) > TccTempToleranceCelsius)
+            {
+                message = string.Format(
+                    "循环箱温度不符合模板要求，不能测试。\r\n模板要求:{0:F1}°C\r\n当前实测:{1:F1}°C\r\n允许偏差:±{2:F1}°C",
+                    requiredTmpt, actual, TccTempToleranceCelsius);
                 return false;
             }
             return true;
@@ -3726,6 +4263,7 @@ namespace UIOperateInterleaverFinalTest
         private TccOperatorDecision TryValidateChamberTemperatureWithConfirm(double requiredTmpt, out string message)
         {
             message = "";
+            int operatorRetryRound = 0;
             while (true)
             {
                 if (TryValidateChamberTemperatureOnce(requiredTmpt, out message))
@@ -3739,8 +4277,12 @@ namespace UIOperateInterleaverFinalTest
                     return TccOperatorDecision.OperatorPass;
                 }
 
-                RealtimeMsg(message, StatusType.Error);
-                MessageBoxResult choice = ShowTccOperatorConfirmDialog("循环箱温度校验失败", message);
+                if (operatorRetryRound == 0)
+                    RealtimeMsg(message, StatusType.Error);
+                else
+                    CommonFunction.WriteLog("TCC validate retry fail: " + message);
+
+                MessageBoxResult choice = ShowTccOperatorConfirmDialogOnUi("循环箱温度校验失败", message);
                 if (choice == MessageBoxResult.Yes)
                 {
                     RememberTccOperatorPass(requiredTmpt);
@@ -3751,6 +4293,9 @@ namespace UIOperateInterleaverFinalTest
                 }
                 if (choice == MessageBoxResult.Cancel)
                     return TccOperatorDecision.Abort;
+
+                operatorRetryRound++;
+                WaitBeforeTccOperatorRetry(operatorRetryRound, "开扫前校验");
             }
         }
 
@@ -3772,6 +4317,10 @@ namespace UIOperateInterleaverFinalTest
             if (TasRuntimeConfig.IsTccChamberCheckDisabled())
                 return false;
 
+            // 变温：逻辑温点与目标不同则必须拷温；操作员「通过」只放行通讯/开扫，不跳过保温
+            if (curTestTmpt > -299 && Math.Abs(curTestTmpt - targetTmpt) > 0.001)
+                return true;
+
             if (hasActualReading)
                 return Math.Abs(actualTmpt - targetTmpt) > TccTempToleranceCelsius;
 
@@ -3792,38 +4341,21 @@ namespace UIOperateInterleaverFinalTest
                 return false;
             }
 
-            for (int attempt = 1; attempt <= 2; attempt++)
+            for (int attempt = 1; attempt <= TccSetpointMaxAttempts; attempt++)
             {
                 errMsg = "";
                 int res = tcc.SetTempSetpoint(targetTmpt, ref errMsg);
-                if (res != 0)
-                {
-                    CommonFunction.WriteLog(string.Format(
-                        "TCC SetTempSetpoint fail ({0}/2): {1}", attempt, errMsg));
-                    continue;
-                }
-
-                double setpoint;
-                string spErr = "";
-                if (tcc.GetTempSetpoint(out setpoint, ref spErr) != 0)
-                {
-                    errMsg = string.IsNullOrEmpty(spErr) ? "回读循环箱设定温度失败。" : spErr;
-                    CommonFunction.WriteLog(string.Format(
-                        "TCC GetTempSetpoint fail ({0}/2): {1}", attempt, errMsg));
-                    continue;
-                }
-
-                if (Math.Abs(setpoint - targetTmpt) <= TccSetpointToleranceCelsius)
+                if (res == 0)
                 {
                     errMsg = "";
                     return true;
                 }
 
-                errMsg = string.Format(
-                    "设定温度回读不符：目标 {0:F1}°C，回读 {1:F1}°C",
-                    targetTmpt, setpoint);
                 CommonFunction.WriteLog(string.Format(
-                    "TCC setpoint mismatch ({0}/2): {1}", attempt, errMsg));
+                    "TCC SetTempSetpoint fail ({0}/{1}): {2}",
+                    attempt, TccSetpointMaxAttempts, errMsg));
+                if (attempt < TccSetpointMaxAttempts)
+                    Thread.Sleep(TccSetpointRetryDelayMs);
             }
             return false;
         }
@@ -3871,94 +4403,218 @@ namespace UIOperateInterleaverFinalTest
                 return true;
             }
 
-            string errMsg = "";
-            IUDLTCC tccCtrl = null;
-            bool hasTcc = TryGetTccController(out tccCtrl, out errMsg);
-            bool hasActualReading = false;
-            double actualTmpt = 0;
-
-            if (hasTcc)
+            // 同温续扫（如 Demux Even→Odd、同温下一 SN）：逻辑温已到位，不再读温/设温/烤温
+            if (curTestTmpt > -299 && Math.Abs(curTestTmpt - targetTmpt) < 0.001)
             {
-                TccOperatorDecision readDecision = TryReadChamberTemperatureWithOperatorConfirm(
-                    tccCtrl, targetTmpt, out actualTmpt, out hasActualReading, ref errMsg);
-                if (readDecision == TccOperatorDecision.Abort)
-                {
-                    RealtimeMsg("操作员终止：循环箱读温失败。", StatusType.Error);
-                    RestoreUiOnChamberFail(restoreOnekeyUiOnFail);
-                    UIControl.IsScanEnable = true;
-                    UIControl.IsSaveEnable = true;
-                    return false;
-                }
-                if (hasActualReading)
-                    RealtimeMsg(string.Format("读取循环箱温度:{0:F1}°C", actualTmpt));
-                else
-                    RealtimeMsg("循环箱读温失败，操作员选择通过（将按逻辑温度判断是否烤温）。", StatusType.Warning);
-            }
-
-            if (!IsBakeRequired(targetTmpt, actualTmpt, hasActualReading))
-            {
-                curTestTmpt = targetTmpt;
-                if (!EnsureChamberReadyForTest(targetTmpt, restoreOnekeyUiOnFail))
-                    return false;
+                RealtimeMsg(string.Format("同温续扫，跳过循环箱准备（{0:F1}°C）", targetTmpt));
                 DoScanOnBK();
                 return true;
             }
 
-            if (!hasTcc)
+            if (chamberPrepBK != null && chamberPrepBK.IsBusy)
             {
-                string message = "循环箱未连接，无法进行变温拷温，请先连接循环箱！";
-                RealtimeMsg(message, StatusType.Error);
-                ErrorBox(message);
-                RestoreUiOnChamberFail(restoreOnekeyUiOnFail);
+                RealtimeMsg("循环箱正在准备中，请稍候…", StatusType.Warning);
                 return false;
             }
 
-            RealtimeMsg(string.Format("开始进行 {0:F1}°C 拷温", targetTmpt));
-            if (!TrySetChamberSetpoint(tccCtrl, targetTmpt, ref errMsg))
+            UIControl.IsScanEnable = false;
+            UpdateChamberPrepStatus(
+                string.Format("准备 {0:F0}°C", targetTmpt),
+                string.Format("正在准备循环箱 {0:F1}°C（读温/设温后台进行，界面不阻塞）…", targetTmpt));
+
+            chamberPrepBK = new BackgroundWorker();
+            chamberPrepBK.WorkerSupportsCancellation = false;
+            chamberPrepBK.DoWork += ChamberPrep_DoWork;
+            chamberPrepBK.RunWorkerCompleted += ChamberPrep_RunWorkerCompleted;
+            chamberPrepBK.RunWorkerAsync(new ChamberPrepRequest
             {
-                string message = string.Format("循环箱设置温度失败:{0:F1}°C，{1}", targetTmpt, errMsg);
-                RealtimeMsg(message, StatusType.Error);
-                ErrorBox(message);
-                RestoreUiOnChamberFail(restoreOnekeyUiOnFail);
-                return false;
+                TargetTmpt = targetTmpt,
+                SoakMinutes = soakMinutes,
+                RestoreOnekeyUiOnFail = restoreOnekeyUiOnFail
+            });
+            return true;
+        }
+
+        private void ChamberPrep_DoWork(object sender, DoWorkEventArgs e)
+        {
+            var req = (ChamberPrepRequest)e.Argument;
+            var result = new ChamberPrepResult
+            {
+                TargetTmpt = req.TargetTmpt,
+                SoakMinutes = req.SoakMinutes,
+                RestoreOnekeyUiOnFail = req.RestoreOnekeyUiOnFail,
+                Outcome = ChamberPrepOutcome.Failed,
+                Message = ""
+            };
+            e.Result = result;
+
+            try
+            {
+                string errMsg = "";
+                IUDLTCC tccCtrl = null;
+                bool hasTcc = false;
+                Dispatcher.Invoke(new Action(() =>
+                {
+                    hasTcc = TryGetTccController(out tccCtrl, out errMsg);
+                }));
+
+                bool hasActualReading = false;
+                double actualTmpt = 0;
+                double fromTmpt = curTestTmpt > -299 ? curTestTmpt : 25.0;
+
+                if (hasTcc && tccCtrl != null)
+                {
+                    UpdateChamberPrepStatus(
+                        "读温中…",
+                        string.Format("正在读取循环箱温度（目标 {0:F1}°C）…", req.TargetTmpt));
+                    TccOperatorDecision readDecision = TryReadChamberTemperatureWithOperatorConfirm(
+                        tccCtrl, req.TargetTmpt, out actualTmpt, out hasActualReading, ref errMsg);
+                    if (readDecision == TccOperatorDecision.Abort)
+                    {
+                        result.Outcome = ChamberPrepOutcome.Aborted;
+                        result.Message = "操作员终止：循环箱读温失败。";
+                        return;
+                    }
+                    if (hasActualReading)
+                    {
+                        fromTmpt = actualTmpt;
+                        UpdateChamberPrepStatus(
+                            string.Format("实测 {0:F1}°C", actualTmpt),
+                            string.Format("读取循环箱温度:{0:F1}°C", actualTmpt));
+                    }
+                    else
+                    {
+                        UpdateChamberPrepStatus(
+                            string.Format("准备 {0:F0}°C", req.TargetTmpt),
+                            "循环箱读温失败，操作员选择通过（将按逻辑温度判断是否烤温）。");
+                    }
+                }
+
+                if (!IsBakeRequired(req.TargetTmpt, actualTmpt, hasActualReading))
+                {
+                    result.Outcome = ChamberPrepOutcome.NeedScan;
+                    return;
+                }
+
+                if (!hasTcc || tccCtrl == null)
+                {
+                    result.Outcome = ChamberPrepOutcome.Failed;
+                    result.Message = "循环箱未连接，无法进行变温拷温，请先连接循环箱！";
+                    return;
+                }
+
+                UpdateChamberPrepStatus(
+                    string.Format("设温中 {0:F0}°C", req.TargetTmpt),
+                    string.Format("开始进行 {0:F1}°C 拷温准备（设温）…", req.TargetTmpt));
+
+                if (!TrySetChamberSetpointWithOperatorConfirm(tccCtrl, req.TargetTmpt, fromTmpt, ref errMsg))
+                {
+                    result.Outcome = ChamberPrepOutcome.Aborted;
+                    result.Message = string.IsNullOrEmpty(errMsg)
+                        ? string.Format("循环箱设置温度失败:{0:F1}°C", req.TargetTmpt)
+                        : string.Format("循环箱设置温度失败:{0:F1}°C，{1}", req.TargetTmpt, errMsg);
+                    return;
+                }
+
+                result.Outcome = ChamberPrepOutcome.NeedBake;
+            }
+            catch (Exception ex)
+            {
+                result.Outcome = ChamberPrepOutcome.Failed;
+                result.Message = "循环箱准备异常:" + ex.Message;
+                CommonFunction.WriteLog("ChamberPrep_DoWork: " + ex);
+            }
+        }
+
+        private void ChamberPrep_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
+        {
+            var result = e.Result as ChamberPrepResult;
+            if (e.Error != null)
+            {
+                CommonFunction.WriteLog("ChamberPrep_RunWorkerCompleted: " + e.Error);
+                ErrorBox("循环箱准备异常:" + e.Error.Message);
+                RestoreUiOnChamberFail(true);
+                UIControl.IsScanEnable = true;
+                UIControl.IsSaveEnable = true;
+                return;
+            }
+            if (result == null)
+            {
+                RestoreUiOnChamberFail(true);
+                UIControl.IsScanEnable = true;
+                return;
             }
 
+            if (result.Outcome == ChamberPrepOutcome.NeedScan)
+            {
+                curTestTmpt = result.TargetTmpt;
+                DoScanOnBK();
+                return;
+            }
+
+            if (result.Outcome == ChamberPrepOutcome.NeedBake)
+            {
+                StartBakeAfterChamberPrep(result.TargetTmpt, result.SoakMinutes);
+                return;
+            }
+
+            if (result.Outcome == ChamberPrepOutcome.Aborted)
+            {
+                RealtimeMsg(result.Message ?? "操作员终止循环箱准备。", StatusType.Error);
+                RestoreUiOnChamberFail(result.RestoreOnekeyUiOnFail);
+                UIControl.IsScanEnable = true;
+                UIControl.IsSaveEnable = true;
+                TemptRemainTime.Text = "00:00:00";
+                return;
+            }
+
+            string failMsg = string.IsNullOrEmpty(result.Message) ? "循环箱准备失败。" : result.Message;
+            RealtimeMsg(failMsg, StatusType.Error);
+            ErrorBox(failMsg);
+            RestoreUiOnChamberFail(result.RestoreOnekeyUiOnFail);
+            UIControl.IsScanEnable = true;
+            UIControl.IsSaveEnable = true;
+            TemptRemainTime.Text = "00:00:00";
+        }
+
+        private void StartBakeAfterChamberPrep(double targetTmpt, double soakMinutes)
+        {
+            RealtimeMsg(string.Format("循环箱已设向 {0:F1}°C，开始烤温倒计时。", targetTmpt));
             if (bakeTimeCheckBK.IsBusy)
                 bakeTimeCheckBK.CancelAsync();
 
             curBakeStatus = BakeStatus.Baking;
             UIControl.IsClearSNVisiable = Visibility.Visible;
-            TemptRemainTime.Text = "00:00:00";
             curTestTmpt = targetTmpt;
-            bakeTimeCheckBK.RunWorkerAsync(soakMinutes * 60);
-            return true;
-        }
+            int totalSeconds = Math.Max(1, (int)Math.Round(soakMinutes * 60));
+            ShowBakeWaitOverlay(targetTmpt, totalSeconds);
 
-        private bool EnsureChamberReadyForTest(double requiredTmpt, bool restoreOnekeyUiOnFail = false)
-        {
-            if (TasRuntimeConfig.IsTccChamberCheckDisabled())
+            if (bakeTimeCheckBK.IsBusy)
             {
-                RealtimeMsg("已跳过循环箱温度校验（set\\DisableTccChamberCheck.txt）");
-                return true;
+                // CancelAsync 尚未结束时延迟再启，避免 InvalidOperationException
+                var retry = new BackgroundWorker();
+                retry.DoWork += (s, args) =>
+                {
+                    for (int i = 0; i < 50 && bakeTimeCheckBK.IsBusy; i++)
+                        Thread.Sleep(100);
+                };
+                retry.RunWorkerCompleted += (s, args) =>
+                {
+                    if (!bakeTimeCheckBK.IsBusy)
+                        bakeTimeCheckBK.RunWorkerAsync(soakMinutes * 60);
+                    else
+                    {
+                        HideWaitOverlay();
+                        RealtimeMsg("烤温计时启动失败：上一烤温线程未结束。", StatusType.Error);
+                        UIControl.IsScanEnable = true;
+                    }
+                };
+                retry.RunWorkerAsync();
             }
-
-            string message;
-            TccOperatorDecision decision = TryValidateChamberTemperatureWithConfirm(requiredTmpt, out message);
-            if (decision == TccOperatorDecision.Success)
+            else
             {
-                RealtimeMsg(string.Format("循环箱温度校验通过，模板要求 {0:F1}°C", requiredTmpt));
-                return true;
+                bakeTimeCheckBK.RunWorkerAsync(soakMinutes * 60);
             }
-            if (decision == TccOperatorDecision.OperatorPass)
-            {
-                RealtimeMsg(string.Format("循环箱温度校验未通过，操作员选择通过（目标 {0:F1}°C）。", requiredTmpt), StatusType.Warning);
-                return true;
-            }
-            RealtimeMsg("操作员终止：循环箱温度校验失败。", StatusType.Error);
-            RestoreUiOnChamberFail(restoreOnekeyUiOnFail);
-            UIControl.IsScanEnable = true;
-            UIControl.IsSaveEnable = true;
-            return false;
         }
 
         /// <summary>
@@ -4207,6 +4863,7 @@ namespace UIOperateInterleaverFinalTest
                 if (bakeTimeCheckBK.IsBusy)
                     bakeTimeCheckBK.CancelAsync();
                 curBakeStatus = BakeStatus.UnBake;
+                HideWaitOverlay();
                 ClearTccOperatorPassMemory();
                 AllProducts.Clear();
                 allProductControl.Clear();
@@ -4455,6 +5112,7 @@ namespace UIOperateInterleaverFinalTest
 
         private void UserControl_Unloaded(object sender, RoutedEventArgs e)
         {
+            CloseWaitOverlayWindow();
             refTimeCheckBK.CancelAsync();
             if (bakeTimeCheckBK.IsBusy)
                 bakeTimeCheckBK.CancelAsync();

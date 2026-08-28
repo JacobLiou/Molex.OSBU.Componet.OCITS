@@ -85,6 +85,18 @@ namespace DeviceControl
             return res;
         }
 
+        /// <summary>
+        /// UDL 数据格式类错误（非通讯中断）：Set/Get 回报失败但箱控可能已执行。
+        /// 0x000E0091=当前温度值格式；0x000E0092=设定温度值格式。
+        /// </summary>
+        private static bool IsUdlTccFormatParseError(string errMsg)
+        {
+            if (string.IsNullOrEmpty(errMsg))
+                return false;
+            return errMsg.IndexOf("0x000E0091", StringComparison.OrdinalIgnoreCase) >= 0
+                || errMsg.IndexOf("0x000E0092", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
         private int SetTempSetpointImpl(double setTempr, ref string errMsg)
         {
             if (DeviceHandle.tccCtrl == null)
@@ -92,17 +104,30 @@ namespace DeviceControl
                 errMsg = "TCC object is null.";
                 return 1;
             }
+            errMsg = "";
             DeviceHandle.tccCtrl.SetTempSetpoint(deviceGUID, setTempr);
             DeviceHandle.GetUDLMessage(ref errMsg);
-            if (errMsg.Length > 0)
+            if (errMsg.Length == 0)
+                return 0;
+
+            // 新版循环箱/UDL 驱动常见：Set 内部解析当前温/设定温格式失败，但写命令与读实测温仍正常。
+            if (IsUdlTccFormatParseError(errMsg))
             {
-                double getTempr = -1000;
-                DeviceHandle.tccCtrl.GetTempSetpoint(deviceGUID, out getTempr);
-                if (setTempr.CompareTo(getTempr) == 0)
+                double probe;
+                string readErr = "";
+                DeviceHandle.tccCtrl.GetCurrentTemp(deviceGUID, out probe);
+                DeviceHandle.GetUDLMessage(ref readErr);
+                if (readErr.Length == 0)
+                {
+                    CommonFunction.WriteLog(string.Format(
+                        "TCC SetTempSetpoint: ignore format err, read OK. set={0:F1}, actual={1:F1}, udlErr={2}",
+                        setTempr, probe, errMsg));
+                    errMsg = "";
                     return 0;
-                return 1;
+                }
             }
-            return 0;
+
+            return 1;
         }
 
         /// <summary>
