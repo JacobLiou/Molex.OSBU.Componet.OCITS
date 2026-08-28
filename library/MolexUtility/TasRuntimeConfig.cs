@@ -38,16 +38,6 @@ namespace MolexUtility
         }
 
         /// <summary>
-        /// 若存在空标记文件 set\DisableRoomTempIlGate.txt，则常温 MAXIL/MINIL 不合格时
-        /// 仍允许进入高低温（调试/试跑；产线勿长期保留）。
-        /// </summary>
-        public static bool IsRoomTempIlGateDisabled()
-        {
-            string flag = Path.Combine(Environment.CurrentDirectory, "set", "DisableRoomTempIlGate.txt");
-            return File.Exists(flag);
-        }
-
-        /// <summary>
         /// 若存在空标记文件 set\RtOnlyTest.txt，则一键/单项测试仅调度常温项（约 20~30°C），跳过 LT/HT。
         /// </summary>
         public static bool IsRtOnlyTestMode()

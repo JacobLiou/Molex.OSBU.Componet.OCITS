@@ -1,3 +1,0 @@
-# 调试用：常温 MAXIL/MINIL 不合格时仍允许进入高低温测试。
-# 放到运行目录 set\DisableRoomTempIlGate.txt（空文件即可）。
-# 测完请删除，恢复产线闸门。
