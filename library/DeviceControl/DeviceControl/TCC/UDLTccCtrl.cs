@@ -61,23 +61,5 @@ namespace DeviceControl
             }
             return 0;
         }
-
-        /// <summary>
-        /// 读取循环箱设定温度（setpoint）
-        /// </summary>
-        public int GetTempSetpoint(out double getTempr, ref string errMsg)
-        {
-            getTempr = CommonFunction.GetDefaultValue();
-            if (DeviceHandle.tccCtrl == null)
-            {
-                errMsg = "TCC object is null.";
-                return 1;
-            }
-            DeviceHandle.tccCtrl.GetTempSetpoint(deviceGUID, out getTempr);
-            DeviceHandle.GetUDLMessage(ref errMsg);
-            if (errMsg.Length > 0)
-                return 1;
-            return 0;
-        }
     }
 }

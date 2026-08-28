@@ -91,31 +91,11 @@ namespace UIOperateInterleaverFinalTest
         /// <summary>循环箱实测温度与模板要求温度的允许偏差（°C）</summary>
         private const double TccTempToleranceCelsius = 2.0;
 
-        /// <summary>开扫前连续读温次数</summary>
-        private const int TccStableReadCount = 3;
-
-        /// <summary>连续读温间隔（毫秒）</summary>
-        private const int TccStableReadIntervalMs = 500;
-
-        /// <summary>连续读温允许极差（°C）</summary>
-        private const double TccStableMaxSpreadCelsius = 1.0;
-
-        /// <summary>设点回读允许偏差（°C）</summary>
-        private const double TccSetpointToleranceCelsius = 0.5;
-
         /// <summary>循环箱读温最大尝试次数（含首次）</summary>
         private const int TccReadMaxAttempts = 3;
 
         /// <summary>循环箱读温失败后重试间隔（毫秒）</summary>
-        private const int TccReadRetryDelayMs = 1000;
-
-        /// <summary>循环箱读温/校验操作员决策</summary>
-        private enum TccOperatorDecision
-        {
-            Success = 0,
-            OperatorPass = 1,
-            Abort = 2
-        }
+        private const int TccReadRetryDelayMs = 500;
 
         /// <summary>TAS 打开模板 STA 线程最长等待（毫秒）</summary>
         private const int OpenTemplateStaTimeoutMs = 180000;
@@ -1150,7 +1130,6 @@ namespace UIOperateInterleaverFinalTest
             {
                 List<MESTestInfo> testInfos = allProductControl[productID].GetAllTestInfo();
                 List<MESTestInfo> shows = testShowControl[productID].GetAllTestInfo();
-                var pendingUi = new List<Tuple<MESTestInfo, int>>();
                 for (int i = 0; i < testInfos.Count; i++)
                 {
                     if (!ShouldShowTestItemInList(testInfos[i]))
@@ -1161,29 +1140,13 @@ namespace UIOperateInterleaverFinalTest
                             && testInfos[i].Temperature == shows[j].Temperature
                             && testInfos[i].ExParamName == shows[j].ExParamName)
                         {
-                            double oldValue = shows[j].CurValue;
-                            bool oldPass = shows[j].Pass;
-                            bool oldTested = shows[j].Tested;
                             bool isPass = false;
                             testShowControl[productID].UpdateTestData(j, testInfos[i].CurValue, ref isPass);
-                            MESTestInfo updated = testShowControl[productID].GetAllTestInfo()[j];
-                            bool valueChanged = Math.Abs(updated.CurValue - oldValue) > 0.0005
-                                || updated.Pass != oldPass
-                                || updated.Tested != oldTested;
-                            if (valueChanged)
-                                pendingUi.Add(Tuple.Create(updated, j));
+                            UpdateItem(testShowControl[productID].GetAllTestInfo()[j], productID, j);
                         }
                     }
                 }
-                if (pendingUi.Count > 0 && EventAggregator != null)
-                {
-                    int pid = productID;
-                    Dispatcher.BeginInvoke(new Action(() =>
-                    {
-                        for (int k = 0; k < pendingUi.Count; k++)
-                            UpdateItem(pendingUi[k].Item1, pid, pendingUi[k].Item2);
-                    }), DispatcherPriority.Background);
-                }
+                // 更新测试信息
             }
         }
 
@@ -2655,46 +2618,6 @@ namespace UIOperateInterleaverFinalTest
         }
 
         /// <summary>
-        /// 在 STA 线程执行 FSTP Scan，避免 Dispatcher.Invoke 把十几秒等待占满 UI；
-        /// 对齐打开模板/上传的 STA 策略（UDL COM 不宜在 BackgroundWorker 默认 MTA 上直接调）。
-        /// </summary>
-        private static int RunFstpScanOnStaThread(
-            IUDLFSTP scan, bool doPdl, bool doRef, double wlStart, double wlStop, double step,
-            ref string dataPath, ref string errMsg)
-        {
-            int scanRes = 2;
-            string localPath = dataPath;
-            string localErr = "";
-            Exception threadEx = null;
-            var staThread = new Thread(() =>
-            {
-                try
-                {
-                    scanRes = scan.Scan(doPdl, doRef, wlStart, wlStop, step, ref localPath, ref localErr);
-                }
-                catch (Exception ex)
-                {
-                    threadEx = ex;
-                    scanRes = 2;
-                    localErr = ex.Message ?? "FSTP Scan STA exception";
-                }
-            });
-            staThread.SetApartmentState(ApartmentState.STA);
-            staThread.IsBackground = true;
-            staThread.Start();
-            staThread.Join();
-            dataPath = localPath;
-            if (threadEx != null)
-            {
-                errMsg = localErr;
-                CommonFunction.WriteLog("RunFstpScanOnStaThread: " + threadEx);
-                return 2;
-            }
-            errMsg = localErr;
-            return scanRes;
-        }
-
-        /// <summary>
         /// 扫描
         /// </summary>
         /// <param name="scanInfo">扫描类型，是否带PDL，归零还是测试</param>
@@ -2726,10 +2649,13 @@ namespace UIOperateInterleaverFinalTest
                     if(scan!=null)
                     {
                         resPath = scanWithPDLFile;
+                        int scanRes = 0;
                         string savePath = scanWithPDLFile;
                         string scanErrMsg = "";
-                        int scanRes = RunFstpScanOnStaThread(
-                            scan, true, true, dStartWL, dStopWL, fstpScanStep, ref savePath, ref scanErrMsg);
+                        this.Dispatcher.Invoke(() =>
+                        {
+                            scanRes = scan.Scan(true, true, dStartWL, dStopWL, fstpScanStep, ref savePath, ref scanErrMsg);
+                        });
                         CommonFunction.WriteLog(string.Format("fstp scan result:{0}", scanRes));
                         if (scanRes != 0)
                         {
@@ -2749,10 +2675,13 @@ namespace UIOperateInterleaverFinalTest
                     if (scan != null)
                     {
                         CommonFunction.WriteLog(string.Format("Get scan object"));
+                        int scanRes = 0;
                         string savePath = scanWithPDLFile;
                         string scanErrMsg = "";
-                        int scanRes = RunFstpScanOnStaThread(
-                            scan, true, true, dStartWL, dStopWL, fstpScanStep, ref savePath, ref scanErrMsg);
+                        this.Dispatcher.Invoke(() =>
+                        {
+                            scanRes = scan.Scan(true, true, dStartWL, dStopWL, fstpScanStep, ref savePath, ref scanErrMsg);
+                        });
                         CommonFunction.WriteLog(string.Format("fstp scan result:{0}", scanRes));
                         if (scanRes != 0)
                         {
@@ -2796,28 +2725,19 @@ namespace UIOperateInterleaverFinalTest
             if (curTestTmpt > -299 && !TasRuntimeConfig.IsTccChamberCheckDisabled())
             {
                 string chamberMsg;
-                TccOperatorDecision decision = TryValidateChamberTemperatureWithConfirm(curTestTmpt, out chamberMsg);
-                if (decision == TccOperatorDecision.Abort)
+                if (!TryValidateChamberTemperature(curTestTmpt, out chamberMsg))
                 {
-                    RealtimeMsg("操作员终止：开扫前循环箱温度校验失败。", StatusType.Error);
+                    RealtimeMsg(chamberMsg, StatusType.Error);
+                    ErrorBox(chamberMsg);
                     UIControl.IsScanEnable = true;
                     UIControl.IsSaveEnable = true;
                     return;
                 }
-                if (decision == TccOperatorDecision.OperatorPass)
-                    RealtimeMsg(string.Format("开扫前温度校验未通过，操作员选择通过（目标 {0:F1}°C）。", curTestTmpt), StatusType.Warning);
-                else
-                    RealtimeMsg(string.Format("开扫前循环箱温度校验通过，模板要求 {0:F1}°C", curTestTmpt));
             }
             if (GetIsScanFinished())
             {
                 SetIsScanFinished(false);
-                int snOrdinal = (scanDetailInfo != null && scanDetailInfo.ProductIndex > 0)
-                    ? scanDetailInfo.ProductIndex
-                    : Math.Max(1, CurProductIndex + 1);
-                int snTotal = Math.Max(1, allProductControl.Count);
-                string scanKind = scanDetailInfo != null ? scanDetailInfo.ScanType.ToString() : "";
-                RealtimeMsg(string.Format("扫描中 SN {0}/{1} ({2})。。。", snOrdinal, snTotal, scanKind));
+                RealtimeMsg("开始扫描。。。");
                 BackgroundWorker bkScan = new BackgroundWorker();
                 bkScan.DoWork += Scan_DoWork;
                 bkScan.RunWorkerCompleted += Scan_RunWorkerCompleted;
@@ -2839,7 +2759,7 @@ namespace UIOperateInterleaverFinalTest
                 CommonFunction.WriteLog("Scan_DoWork begin");
                 scanDetailInfo = (ScanDetail)e.Argument;
                 CurProductIndex = scanDetailInfo.ProductIndex-1;
-                this.Dispatcher.BeginInvoke(new Action(UpdateProductStatuses));
+                this.Dispatcher.Invoke(new Action(UpdateProductStatuses));
                 scanErrorMsg = "";
                 bool isFstpScan = true;
                 int res = 0;
@@ -3449,30 +3369,10 @@ namespace UIOperateInterleaverFinalTest
             return key == "MAXIL" || key == "MINIL";
         }
 
-        /// <summary>
-        /// 总通道行上的 MAXIL/MINIL（排除 通道_频率_PORTn 子项与 Frequency Range）。
-        /// </summary>
-        private static bool IsChannelMaxMinIlRow(MESTestInfo info)
-        {
-            if (info == null || !IsMaxMinIlParam(info.ExParamName))
-                return false;
-            string[] splits = info.PortNameForUser.Split('_');
-            if (splits.Length != 1)
-                return false;
-            if (info.PortNameForUser.Equals("Frequency Range", StringComparison.OrdinalIgnoreCase))
-                return false;
-            return true;
-        }
-
-        /// <summary>
-        /// 查找常温 MAXIL/MINIL 问题项。
-        /// matchCurTestTmptOnly：true 时仅匹配 curTestTmpt（批次早停）；false 时匹配所有常温（20~30°C）。
-        /// includeUntested：true 时未测也视为阻塞（高低温闸门）；false 仅已测不合格（批次早停）。
-        /// </summary>
-        private bool TryGetRoomTempMaxMinIlIssue(bool includeUntested, bool matchCurTestTmptOnly, out string message)
+        private bool TryGetRoomTempMaxMinIlFailure(out string message)
         {
             message = "";
-            if (matchCurTestTmptOnly && !IsRoomTemperature(curTestTmpt))
+            if (!IsRoomTemperature(curTestTmpt))
                 return false;
 
             for (int p = 0; p < allProductControl.Count; p++)
@@ -3482,58 +3382,25 @@ namespace UIOperateInterleaverFinalTest
                 for (int i = 0; i < infos.Count; i++)
                 {
                     MESTestInfo info = infos[i];
-                    if (matchCurTestTmptOnly)
-                    {
-                        if (Math.Abs(info.Temperature - curTestTmpt) > 0.001)
-                            continue;
-                    }
-                    else if (!IsRoomTemperature(info.Temperature))
-                    {
+                    if (Math.Abs(info.Temperature - curTestTmpt) > 0.001)
                         continue;
-                    }
-
-                    if (!IsChannelMaxMinIlRow(info))
+                    if (!info.Tested || info.Pass)
+                        continue;
+                    if (!IsMaxMinIlParam(info.ExParamName))
+                        continue;
+                    string[] splits = info.PortNameForUser.Split('_');
+                    if (splits.Length != 1)
+                        continue;
+                    if (info.PortNameForUser.Equals("Frequency Range", StringComparison.OrdinalIgnoreCase))
                         continue;
 
-                    if (!info.Tested)
-                    {
-                        if (!includeUntested)
-                            continue;
-                        message = string.Format(
-                            "SN:{0}\r\n端口:{1}\r\n参数:{2}\r\n状态:未测试",
-                            sn, info.PortNameForUser, info.ExParamName);
-                        return true;
-                    }
-
-                    if (!info.Pass)
-                    {
-                        message = string.Format(
-                            "SN:{0}\r\n端口:{1}\r\n参数:{2}\r\n实测:{3:F3}\r\n限值:[{4}, {5}]",
-                            sn, info.PortNameForUser, info.ExParamName, info.CurValue, info.Criterion, info.Criterion1);
-                        return true;
-                    }
+                    message = string.Format(
+                        "SN:{0}\r\n端口:{1}\r\n参数:{2}\r\n实测:{3:F3}\r\n限值:[{4}, {5}]",
+                        sn, info.PortNameForUser, info.ExParamName, info.CurValue, info.Criterion, info.Criterion1);
+                    return true;
                 }
             }
             return false;
-        }
-
-        private bool TryGetRoomTempMaxMinIlFailure(out string message)
-        {
-            return TryGetRoomTempMaxMinIlIssue(includeUntested: false, matchCurTestTmptOnly: true, out message);
-        }
-
-        /// <summary>
-        /// 进入高低温前：常温 MAXIL/MINIL 必须全部已测且合格。
-        /// </summary>
-        /// <returns>true 表示应拦截（未测或不合格）</returns>
-        private bool TryBlockHighLowTempForRoomTempIl(out string message)
-        {
-            message = "";
-            string detail;
-            if (!TryGetRoomTempMaxMinIlIssue(includeUntested: true, matchCurTestTmptOnly: false, out detail))
-                return false;
-            message = "常温 MAXIL/MINIL 未合格，不能进行高低温测试。\r\n\r\n" + detail;
-            return true;
         }
 
         private void AbortBatchTest(string detailMessage)
@@ -3574,11 +3441,14 @@ namespace UIOperateInterleaverFinalTest
         }
 
         /// <summary>
-        /// 读取循环箱实测温度；通讯失败时短重试，最终失败返回非 0（禁止假定目标温）。
+        /// 读取循环箱温度；通讯失败时静默重试，最终失败按模板温度假定成功（界面不展示错误码）。
         /// </summary>
-        private int TryReadChamberTemperature(IUDLTCC tcc, out double actual, ref string errMsg)
+        /// <param name="assumedTmpt">模板目标温度，读失败降级时使用</param>
+        /// <param name="usedAssumed">true 表示使用了模板假定温度</param>
+        private int TryReadChamberTemperature(IUDLTCC tcc, double assumedTmpt, out double actual, out bool usedAssumed, ref string errMsg)
         {
             actual = 0;
+            usedAssumed = false;
             if (tcc == null)
             {
                 errMsg = "循环箱未配置或未连接。";
@@ -3591,70 +3461,27 @@ namespace UIOperateInterleaverFinalTest
                 int res = tcc.GetCurrentTemp(out actual, ref errMsg);
                 if (res == 0)
                 {
+                    usedAssumed = false;
                     errMsg = "";
                     return 0;
                 }
                 lastErrMsg = errMsg ?? "";
                 CommonFunction.WriteLog(string.Format(
-                    "TCC GetCurrentTemp fail ({0}/{1}): {2}",
-                    attempt, TccReadMaxAttempts, lastErrMsg));
+                    "TCC GetCurrentTemp fail ({0}/{1}): {2}; assumedTmpt={3:F1}",
+                    attempt, TccReadMaxAttempts, lastErrMsg, assumedTmpt));
                 if (attempt < TccReadMaxAttempts)
                     Thread.Sleep(TccReadRetryDelayMs);
             }
-            errMsg = string.IsNullOrEmpty(lastErrMsg) ? "读取循环箱温度失败。" : lastErrMsg;
-            actual = 0;
-            return 1;
+            actual = assumedTmpt;
+            usedAssumed = true;
+            errMsg = "";
+            CommonFunction.WriteLog(string.Format(
+                "TCC GetCurrentTemp all retries failed, use assumed template temp {0:F1}°C. lastErr={1}",
+                assumedTmpt, lastErrMsg));
+            return 0;
         }
 
-        /// <summary>
-        /// 三按钮：是=通过，否=重试，取消=终止。
-        /// </summary>
-        private static MessageBoxResult ShowTccOperatorConfirmDialog(string title, string detail)
-        {
-            string body = (detail ?? "") +
-                "\r\n\r\n请选择：\r\n[是] 通过 — 目视确认后强制放行\r\n[否] 重试 — 重新读取/校验\r\n[取消] 终止 — 停止测试";
-            return MessageBox.Show(body, title, MessageBoxButton.YesNoCancel, MessageBoxImage.Warning);
-        }
-
-        /// <summary>
-        /// 读温；失败则弹框：通过 / 重试 / 终止。通过时无实测（hasActualReading=false）。
-        /// </summary>
-        private TccOperatorDecision TryReadChamberTemperatureWithOperatorConfirm(
-            IUDLTCC tcc, double targetTmpt, out double actual, out bool hasActualReading, ref string errMsg)
-        {
-            actual = 0;
-            hasActualReading = false;
-            while (true)
-            {
-                errMsg = "";
-                if (TryReadChamberTemperature(tcc, out actual, ref errMsg) == 0)
-                {
-                    hasActualReading = true;
-                    return TccOperatorDecision.Success;
-                }
-
-                string detail = string.Format(
-                    "无法读取循环箱温度。\r\n模板目标:{0:F1}°C\r\n原因:{1}",
-                    targetTmpt, string.IsNullOrEmpty(errMsg) ? "通讯失败" : errMsg);
-                RealtimeMsg(detail, StatusType.Error);
-                MessageBoxResult choice = ShowTccOperatorConfirmDialog("循环箱读温失败", detail);
-                if (choice == MessageBoxResult.Yes)
-                {
-                    CommonFunction.WriteLog(string.Format(
-                        "TCC operator override (read fail): target={0:F1}, err={1}", targetTmpt, errMsg));
-                    hasActualReading = false;
-                    actual = 0;
-                    return TccOperatorDecision.OperatorPass;
-                }
-                if (choice == MessageBoxResult.Cancel)
-                    return TccOperatorDecision.Abort;
-            }
-        }
-
-        /// <summary>
-        /// 开扫前硬校验：连续多次一致实测。不弹框。
-        /// </summary>
-        private bool TryValidateChamberTemperatureOnce(double requiredTmpt, out string message)
+        private bool TryValidateChamberTemperature(double requiredTmpt, out string message)
         {
             message = "";
             string errMsg = "";
@@ -3667,71 +3494,17 @@ namespace UIOperateInterleaverFinalTest
                     : "循环箱未配置或未连接：" + errMsg;
                 return false;
             }
-
-            double[] samples = new double[TccStableReadCount];
-            for (int i = 0; i < TccStableReadCount; i++)
-            {
-                if (i > 0)
-                    Thread.Sleep(TccStableReadIntervalMs);
-                double actual;
-                if (TryReadChamberTemperature(tccCtrl, out actual, ref errMsg) != 0)
-                {
-                    message = string.Format(
-                        "循环箱温度校验失败（第{0}/{1}次读温）。\r\n模板要求:{2:F1}°C\r\n原因:{3}",
-                        i + 1, TccStableReadCount, requiredTmpt,
-                        string.IsNullOrEmpty(errMsg) ? "通讯失败" : errMsg);
-                    return false;
-                }
-                samples[i] = actual;
-                if (Math.Abs(actual - requiredTmpt) > TccTempToleranceCelsius)
-                {
-                    message = string.Format(
-                        "循环箱温度不符合模板要求，不能测试。\r\n模板要求:{0:F1}°C\r\n当前实测:{1:F1}°C\r\n允许偏差:±{2:F1}°C",
-                        requiredTmpt, actual, TccTempToleranceCelsius);
-                    return false;
-                }
-            }
-
-            double min = samples[0];
-            double max = samples[0];
-            for (int i = 1; i < samples.Length; i++)
-            {
-                if (samples[i] < min) min = samples[i];
-                if (samples[i] > max) max = samples[i];
-            }
-            if ((max - min) > TccStableMaxSpreadCelsius)
+            double actual;
+            bool usedAssumed;
+            TryReadChamberTemperature(tccCtrl, requiredTmpt, out actual, out usedAssumed, ref errMsg);
+            if (Math.Abs(actual - requiredTmpt) > TccTempToleranceCelsius)
             {
                 message = string.Format(
-                    "循环箱温度读数不稳定，不能测试。\r\n模板要求:{0:F1}°C\r\n三次实测:[{1:F1}, {2:F1}, {3:F1}]\r\n极差:{4:F1}°C（允许≤{5:F1}°C）",
-                    requiredTmpt, samples[0], samples[1], samples[2], max - min, TccStableMaxSpreadCelsius);
+                    "循环箱温度不符合模板要求，不能测试。\r\n模板要求:{0:F1}°C\r\n当前实测:{1:F1}°C\r\n允许偏差:±{2:F1}°C",
+                    requiredTmpt, actual, TccTempToleranceCelsius);
                 return false;
             }
             return true;
-        }
-
-        /// <summary>
-        /// 校验温度；失败弹框：通过 / 重试 / 终止。
-        /// </summary>
-        private TccOperatorDecision TryValidateChamberTemperatureWithConfirm(double requiredTmpt, out string message)
-        {
-            message = "";
-            while (true)
-            {
-                if (TryValidateChamberTemperatureOnce(requiredTmpt, out message))
-                    return TccOperatorDecision.Success;
-
-                RealtimeMsg(message, StatusType.Error);
-                MessageBoxResult choice = ShowTccOperatorConfirmDialog("循环箱温度校验失败", message);
-                if (choice == MessageBoxResult.Yes)
-                {
-                    CommonFunction.WriteLog(string.Format(
-                        "TCC operator override (validate fail): required={0:F1}, detail={1}",
-                        requiredTmpt, message));
-                    return TccOperatorDecision.OperatorPass;
-                }
-                if (choice == MessageBoxResult.Cancel)
-                    return TccOperatorDecision.Abort;
-            }
         }
 
         private bool TryGetTccController(out IUDLTCC tcc, out string errMsg)
@@ -3771,41 +3544,10 @@ namespace UIOperateInterleaverFinalTest
                 errMsg = "循环箱未配置或未连接。";
                 return false;
             }
-
-            for (int attempt = 1; attempt <= 2; attempt++)
-            {
-                errMsg = "";
-                int res = tcc.SetTempSetpoint(targetTmpt, ref errMsg);
-                if (res != 0)
-                {
-                    CommonFunction.WriteLog(string.Format(
-                        "TCC SetTempSetpoint fail ({0}/2): {1}", attempt, errMsg));
-                    continue;
-                }
-
-                double setpoint;
-                string spErr = "";
-                if (tcc.GetTempSetpoint(out setpoint, ref spErr) != 0)
-                {
-                    errMsg = string.IsNullOrEmpty(spErr) ? "回读循环箱设定温度失败。" : spErr;
-                    CommonFunction.WriteLog(string.Format(
-                        "TCC GetTempSetpoint fail ({0}/2): {1}", attempt, errMsg));
-                    continue;
-                }
-
-                if (Math.Abs(setpoint - targetTmpt) <= TccSetpointToleranceCelsius)
-                {
-                    errMsg = "";
-                    return true;
-                }
-
-                errMsg = string.Format(
-                    "设定温度回读不符：目标 {0:F1}°C，回读 {1:F1}°C",
-                    targetTmpt, setpoint);
-                CommonFunction.WriteLog(string.Format(
-                    "TCC setpoint mismatch ({0}/2): {1}", attempt, errMsg));
-            }
-            return false;
+            int res = tcc.SetTempSetpoint(targetTmpt, ref errMsg);
+            if (res != 0)
+                res = tcc.SetTempSetpoint(targetTmpt, ref errMsg);
+            return res == 0;
         }
 
         /// <summary>
@@ -3859,20 +3601,13 @@ namespace UIOperateInterleaverFinalTest
 
             if (hasTcc)
             {
-                TccOperatorDecision readDecision = TryReadChamberTemperatureWithOperatorConfirm(
-                    tccCtrl, targetTmpt, out actualTmpt, out hasActualReading, ref errMsg);
-                if (readDecision == TccOperatorDecision.Abort)
-                {
-                    RealtimeMsg("操作员终止：循环箱读温失败。", StatusType.Error);
-                    RestoreUiOnChamberFail(restoreOnekeyUiOnFail);
-                    UIControl.IsScanEnable = true;
-                    UIControl.IsSaveEnable = true;
-                    return false;
-                }
-                if (hasActualReading)
-                    RealtimeMsg(string.Format("读取循环箱温度:{0:F1}°C", actualTmpt));
+                bool usedAssumed;
+                TryReadChamberTemperature(tccCtrl, targetTmpt, out actualTmpt, out usedAssumed, ref errMsg);
+                hasActualReading = true;
+                if (usedAssumed)
+                    RealtimeMsg(string.Format("读取循环箱温度:{0:F1}°C！", actualTmpt));
                 else
-                    RealtimeMsg("循环箱读温失败，操作员选择通过（将按逻辑温度判断是否烤温）。", StatusType.Warning);
+                    RealtimeMsg(string.Format("读取循环箱温度:{0:F1}°C", actualTmpt));
             }
 
             if (!IsBakeRequired(targetTmpt, actualTmpt, hasActualReading))
@@ -3923,21 +3658,14 @@ namespace UIOperateInterleaverFinalTest
             }
 
             string message;
-            TccOperatorDecision decision = TryValidateChamberTemperatureWithConfirm(requiredTmpt, out message);
-            if (decision == TccOperatorDecision.Success)
+            if (TryValidateChamberTemperature(requiredTmpt, out message))
             {
                 RealtimeMsg(string.Format("循环箱温度校验通过，模板要求 {0:F1}°C", requiredTmpt));
                 return true;
             }
-            if (decision == TccOperatorDecision.OperatorPass)
-            {
-                RealtimeMsg(string.Format("循环箱温度校验未通过，操作员选择通过（目标 {0:F1}°C）。", requiredTmpt), StatusType.Warning);
-                return true;
-            }
-            RealtimeMsg("操作员终止：循环箱温度校验失败。", StatusType.Error);
+            RealtimeMsg(message, StatusType.Error);
+            ErrorBox(message);
             RestoreUiOnChamberFail(restoreOnekeyUiOnFail);
-            UIControl.IsScanEnable = true;
-            UIControl.IsSaveEnable = true;
             return false;
         }
 
@@ -4100,10 +3828,7 @@ namespace UIOperateInterleaverFinalTest
             {
                 if (PortNameMatchesChannel(showInfos[j].PortNameForUser, assist.Name))
                 {
-                    bool oldRef = showInfos[j].IsScanRef;
                     testShowControl[productID].UpdateScanRefStatus(j, assist.IsRef);
-                    if (oldRef == assist.IsRef)
-                        continue;
                     UpdateItem(testShowControl[productID].GetAllTestInfo()[j], productID, j);
                 }
             }
@@ -4325,19 +4050,6 @@ namespace UIOperateInterleaverFinalTest
                 UIControl.IsScanEnable = true;
                 UIControl.IsSaveEnable = true;
                 return;
-            }
-            if (!IsRoomTemperature(scanTmpt))
-            {
-                string gateMsg;
-                if (TryBlockHighLowTempForRoomTempIl(out gateMsg))
-                {
-                    CommonFunction.WriteLog(gateMsg);
-                    RealtimeMsg(gateMsg, StatusType.Error);
-                    ErrorBox(gateMsg);
-                    UIControl.IsScanEnable = true;
-                    UIControl.IsSaveEnable = true;
-                    return;
-                }
             }
             //获取同时扫描的端口号。
             //进光端一样，则可以一起扫描，比如in-to,in-te,in-moni同时扫描
@@ -4578,17 +4290,6 @@ namespace UIOperateInterleaverFinalTest
                         "RtOnlyTest 模式仅支持常温测试（约 20~30°C）。\r\n当前项温度:{0:F1}°C\r\n请删除 set\\RtOnlyTest.txt 或改选常温行。",
                         testTmpt));
                     return;
-                }
-                if (!IsRoomTemperature(testTmpt))
-                {
-                    string gateMsg;
-                    if (TryBlockHighLowTempForRoomTempIl(out gateMsg))
-                    {
-                        CommonFunction.WriteLog(gateMsg);
-                        RealtimeMsg(gateMsg, StatusType.Error);
-                        ErrorBox(gateMsg);
-                        return;
-                    }
                 }
 
                 // 单项：同产品同温度全部端口置为未测，扫完后串行续测另一路
