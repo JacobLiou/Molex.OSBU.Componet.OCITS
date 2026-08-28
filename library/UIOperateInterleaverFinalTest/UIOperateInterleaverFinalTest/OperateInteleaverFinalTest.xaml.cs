@@ -117,32 +117,6 @@ namespace UIOperateInterleaverFinalTest
             Abort = 2
         }
 
-        /// <summary>
-        /// 本会话内操作员已对某目标温点过「通过」的集合（按 0.1°C 量化）。
-        /// 同目标温后续读温/校验失败自动放行，减少 16SN 反复弹框。
-        /// </summary>
-        private readonly HashSet<int> tccOperatorPassTempKeys = new HashSet<int>();
-
-        private static int ToTccOperatorPassKey(double targetTmpt)
-        {
-            return (int)Math.Round(targetTmpt * 10.0);
-        }
-
-        private bool IsTccOperatorPassRemembered(double targetTmpt)
-        {
-            return tccOperatorPassTempKeys.Contains(ToTccOperatorPassKey(targetTmpt));
-        }
-
-        private void RememberTccOperatorPass(double targetTmpt)
-        {
-            tccOperatorPassTempKeys.Add(ToTccOperatorPassKey(targetTmpt));
-        }
-
-        private void ClearTccOperatorPassMemory()
-        {
-            tccOperatorPassTempKeys.Clear();
-        }
-
         /// <summary>TAS 打开模板 STA 线程最长等待（毫秒）</summary>
         private const int OpenTemplateStaTimeoutMs = 180000;
 
@@ -309,7 +283,6 @@ namespace UIOperateInterleaverFinalTest
         /// 扫描错误信息
         /// </summary>
         private string scanErrorMsg = "";
-        private int lastScanResCode = 0;
 
         /// <summary>
         /// 用于显示的模板处理类
@@ -1279,7 +1252,6 @@ namespace UIOperateInterleaverFinalTest
                 List<MESTestInfo> testInfos = allProductControl[productIdx].AllTestInfo;
                 if (allProductControl.Count == 1)
                 {
-                    ClearTccOperatorPassMemory();
                     _scanList.Clear();
                     TryOpenTemplateNoticeHtmlAsync(allProductControl[0]);
                     updateParamIndex.Clear();
@@ -2534,12 +2506,9 @@ namespace UIOperateInterleaverFinalTest
                             CommonFunction.WriteLog(string.Format("path:{0}", path));
                             InterleaverScanResult.ReadScanData(path, portResData[dataIndex], ref errMsg);
                             CommonFunction.WriteLog(string.Format("ReadScanData finished"));
-                            if (errMsg.Length > 0)
-                                return 2;
                             InterleaverScanResult.CalFSTPRawdata(portPDLRef[dataIndex], portResData[dataIndex], ref errMsg);
                             CommonFunction.WriteLog(string.Format("CalFSTPRawdata finished"));
-                            if (errMsg.Length > 0)
-                                return 2;
+
                         }
                     }
                     return 0;
@@ -2686,6 +2655,46 @@ namespace UIOperateInterleaverFinalTest
         }
 
         /// <summary>
+        /// 在 STA 线程执行 FSTP Scan，避免 Dispatcher.Invoke 把十几秒等待占满 UI；
+        /// 对齐打开模板/上传的 STA 策略（UDL COM 不宜在 BackgroundWorker 默认 MTA 上直接调）。
+        /// </summary>
+        private static int RunFstpScanOnStaThread(
+            IUDLFSTP scan, bool doPdl, bool doRef, double wlStart, double wlStop, double step,
+            ref string dataPath, ref string errMsg)
+        {
+            int scanRes = 2;
+            string localPath = dataPath;
+            string localErr = "";
+            Exception threadEx = null;
+            var staThread = new Thread(() =>
+            {
+                try
+                {
+                    scanRes = scan.Scan(doPdl, doRef, wlStart, wlStop, step, ref localPath, ref localErr);
+                }
+                catch (Exception ex)
+                {
+                    threadEx = ex;
+                    scanRes = 2;
+                    localErr = ex.Message ?? "FSTP Scan STA exception";
+                }
+            });
+            staThread.SetApartmentState(ApartmentState.STA);
+            staThread.IsBackground = true;
+            staThread.Start();
+            staThread.Join();
+            dataPath = localPath;
+            if (threadEx != null)
+            {
+                errMsg = localErr;
+                CommonFunction.WriteLog("RunFstpScanOnStaThread: " + threadEx);
+                return 2;
+            }
+            errMsg = localErr;
+            return scanRes;
+        }
+
+        /// <summary>
         /// 扫描
         /// </summary>
         /// <param name="scanInfo">扫描类型，是否带PDL，归零还是测试</param>
@@ -2719,7 +2728,8 @@ namespace UIOperateInterleaverFinalTest
                         resPath = scanWithPDLFile;
                         string savePath = scanWithPDLFile;
                         string scanErrMsg = "";
-                        int scanRes = scan.Scan(true, true, dStartWL, dStopWL, fstpScanStep, ref savePath, ref scanErrMsg);
+                        int scanRes = RunFstpScanOnStaThread(
+                            scan, true, true, dStartWL, dStopWL, fstpScanStep, ref savePath, ref scanErrMsg);
                         CommonFunction.WriteLog(string.Format("fstp scan result:{0}", scanRes));
                         if (scanRes != 0)
                         {
@@ -2741,7 +2751,8 @@ namespace UIOperateInterleaverFinalTest
                         CommonFunction.WriteLog(string.Format("Get scan object"));
                         string savePath = scanWithPDLFile;
                         string scanErrMsg = "";
-                        int scanRes = scan.Scan(true, true, dStartWL, dStopWL, fstpScanStep, ref savePath, ref scanErrMsg);
+                        int scanRes = RunFstpScanOnStaThread(
+                            scan, true, true, dStartWL, dStopWL, fstpScanStep, ref savePath, ref scanErrMsg);
                         CommonFunction.WriteLog(string.Format("fstp scan result:{0}", scanRes));
                         if (scanRes != 0)
                         {
@@ -2830,7 +2841,6 @@ namespace UIOperateInterleaverFinalTest
                 CurProductIndex = scanDetailInfo.ProductIndex-1;
                 this.Dispatcher.BeginInvoke(new Action(UpdateProductStatuses));
                 scanErrorMsg = "";
-                lastScanResCode = 0;
                 bool isFstpScan = true;
                 int res = 0;
                 if (isFstpScan)
@@ -2840,14 +2850,9 @@ namespace UIOperateInterleaverFinalTest
                 }
                 else
                     res = ScanAndCalResult(scanDetailInfo, ref scanErrorMsg);
-                lastScanResCode = res;
                 SetIsScanFinished(true);
                 if (scanErrorMsg.Length > 0 || res != 0)
                 {
-                    if (scanErrorMsg.Length == 0)
-                    {
-                        scanErrorMsg = string.Format("FSTP 失败(res={0})，详见日志", res);
-                    }
                     string errMsg = "";
                     //清除测试结果
                     //ClearResult(scanDetailInfo.Ports, ref errMsg);
@@ -2877,9 +2882,7 @@ namespace UIOperateInterleaverFinalTest
             }
             catch (Exception ex)
             {
-                lastScanResCode = 2;
-                scanErrorMsg = ex.Message ?? "Scan_DoWork exception";
-                CommonFunction.WriteLog("Scan_DoWork exception: " + ex);
+
             }
             finally
             {
@@ -3405,11 +3408,8 @@ namespace UIOperateInterleaverFinalTest
                 errMsg = e.Result.ToString();*/
             if (scanErrorMsg.Length > 0)
             {
-                string errDisplay = scanErrorMsg;
-                if (lastScanResCode != 0)
-                    errDisplay = string.Format("{0} (res={1})", scanErrorMsg, lastScanResCode);
-                RealtimeMsg("扫描出错:" + errDisplay);
-                ErrorBox("扫描出错:" + errDisplay);
+                RealtimeMsg("扫描出错:" + scanErrorMsg);
+                ErrorBox("扫描出错:" + scanErrorMsg);
             }
             else
             {
@@ -3633,16 +3633,6 @@ namespace UIOperateInterleaverFinalTest
                     return TccOperatorDecision.Success;
                 }
 
-                if (IsTccOperatorPassRemembered(targetTmpt))
-                {
-                    CommonFunction.WriteLog(string.Format(
-                        "TCC operator override remembered (read fail): target={0:F1}, err={1}",
-                        targetTmpt, errMsg));
-                    hasActualReading = false;
-                    actual = 0;
-                    return TccOperatorDecision.OperatorPass;
-                }
-
                 string detail = string.Format(
                     "无法读取循环箱温度。\r\n模板目标:{0:F1}°C\r\n原因:{1}",
                     targetTmpt, string.IsNullOrEmpty(errMsg) ? "通讯失败" : errMsg);
@@ -3650,7 +3640,6 @@ namespace UIOperateInterleaverFinalTest
                 MessageBoxResult choice = ShowTccOperatorConfirmDialog("循环箱读温失败", detail);
                 if (choice == MessageBoxResult.Yes)
                 {
-                    RememberTccOperatorPass(targetTmpt);
                     CommonFunction.WriteLog(string.Format(
                         "TCC operator override (read fail): target={0:F1}, err={1}", targetTmpt, errMsg));
                     hasActualReading = false;
@@ -3731,19 +3720,10 @@ namespace UIOperateInterleaverFinalTest
                 if (TryValidateChamberTemperatureOnce(requiredTmpt, out message))
                     return TccOperatorDecision.Success;
 
-                if (IsTccOperatorPassRemembered(requiredTmpt))
-                {
-                    CommonFunction.WriteLog(string.Format(
-                        "TCC operator override remembered (validate fail): required={0:F1}, detail={1}",
-                        requiredTmpt, message));
-                    return TccOperatorDecision.OperatorPass;
-                }
-
                 RealtimeMsg(message, StatusType.Error);
                 MessageBoxResult choice = ShowTccOperatorConfirmDialog("循环箱温度校验失败", message);
                 if (choice == MessageBoxResult.Yes)
                 {
-                    RememberTccOperatorPass(requiredTmpt);
                     CommonFunction.WriteLog(string.Format(
                         "TCC operator override (validate fail): required={0:F1}, detail={1}",
                         requiredTmpt, message));
@@ -4207,7 +4187,6 @@ namespace UIOperateInterleaverFinalTest
                 if (bakeTimeCheckBK.IsBusy)
                     bakeTimeCheckBK.CancelAsync();
                 curBakeStatus = BakeStatus.UnBake;
-                ClearTccOperatorPassMemory();
                 AllProducts.Clear();
                 allProductControl.Clear();
                 testShowControl.Clear();
@@ -4239,7 +4218,6 @@ namespace UIOperateInterleaverFinalTest
                 return;
             }
             batchTestAborted = false;
-            ClearTccOperatorPassMemory();
             /*foreach(PortAssist assist in portAssistant)
             {                
                 assist.IsTested = false;

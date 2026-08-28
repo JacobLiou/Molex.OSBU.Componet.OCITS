@@ -12,42 +12,6 @@ namespace DeviceControl
 {
     public class UDLFSTPScan:IUDLFSTP
     {
-        private sealed class StringRef
-        {
-            public string Value;
-        }
-
-        private sealed class MeasureResultHolder
-        {
-            public int Res;
-            public double PdblWL;
-            public double PdblIL;
-            public double PdblPDL;
-            public double PdblTapIL;
-            public int PlDataCount;
-            public string Err;
-        }
-
-        private sealed class MeasureResultTetmHolder
-        {
-            public int Res;
-            public double PdblWL;
-            public double PdblIL;
-            public double PdblPDL;
-            public double PdblTE;
-            public double PdblTM;
-            public double PdblTapIL;
-            public int PlDataCount;
-            public string Err;
-        }
-
-        private sealed class SweepStatusHolder
-        {
-            public int Res;
-            public int PlSweepStatus;
-            public int PlEstWaitingTime;
-            public string Err;
-        }
         /// <summary>
         /// 设备GUID
         /// </summary>
@@ -371,17 +335,6 @@ namespace DeviceControl
         /// <returns>0-成功，1-超时，此时需要重连服务器，2-失败</returns>
         public int Scan(bool doPDL, bool doRef, double dWLStart, double dWLStop, double dStep, ref string errMsg)
         {
-            if (UdlStaHost.IsOnHostThread())
-                return ScanImpl(doPDL, doRef, dWLStart, dWLStop, dStep, ref errMsg);
-
-            var errRef = new StringRef { Value = errMsg };
-            int res = UdlStaHost.Invoke(() => ScanImpl(doPDL, doRef, dWLStart, dWLStop, dStep, ref errRef.Value));
-            errMsg = errRef.Value;
-            return res;
-        }
-
-        private int ScanImpl(bool doPDL, bool doRef, double dWLStart, double dWLStop, double dStep, ref string errMsg)
-        {
             if (DeviceHandle.fstpCtrl == null)
             {
                 errMsg = "FSTP object is null.";
@@ -440,19 +393,6 @@ namespace DeviceControl
         /// <returns>0-成功，1-超时，此时需要重连服务器，2-失败</returns>
         public int Scan(bool doPDL, bool doRef, double dWLStart, double dWLStop, double dStep, ref string dataPath, ref string errMsg)
         {
-            if (UdlStaHost.IsOnHostThread())
-                return ScanWithPathImpl(doPDL, doRef, dWLStart, dWLStop, dStep, ref dataPath, ref errMsg);
-
-            var pathRef = new StringRef { Value = dataPath };
-            var errRef = new StringRef { Value = errMsg };
-            int res = UdlStaHost.Invoke(() => ScanWithPathImpl(doPDL, doRef, dWLStart, dWLStop, dStep, ref pathRef.Value, ref errRef.Value));
-            dataPath = pathRef.Value;
-            errMsg = errRef.Value;
-            return res;
-        }
-
-        private int ScanWithPathImpl(bool doPDL, bool doRef, double dWLStart, double dWLStop, double dStep, ref string dataPath, ref string errMsg)
-        {
             /*MolexUtility.CommonFunction.WriteLog(string.Format("DEVICE CONTROL Scan Begin"));
             requestDoPDL = doPDL;
             requestdoRef = doRef;
@@ -478,7 +418,7 @@ namespace DeviceControl
             errMsg = requestErrMsg;
             if (scanResult == 1)
                 return scanResult;*/
-            int scanCode = ScanImpl(doPDL, doRef, dWLStart, dWLStop, dStep, ref errMsg);
+            int scanCode = Scan(doPDL, doRef, dWLStart, dWLStop, dStep, ref errMsg);
             if (scanCode != 0)
                 return scanCode;
             MolexUtility.CommonFunction.WriteLog(string.Format("DEVICE CONTROL Scan success"));
@@ -544,29 +484,6 @@ namespace DeviceControl
         /// <returns>0--成功，1--失败</returns>
         public int GetSweepStatus(out int plSweepStatus, out int plEstWaitingTime, ref string errMsg)
         {
-            if (UdlStaHost.IsOnHostThread())
-                return GetSweepStatusImpl(out plSweepStatus, out plEstWaitingTime, ref errMsg);
-
-            var holder = new SweepStatusHolder { Err = errMsg };
-            int res = UdlStaHost.Invoke(() =>
-            {
-                int status;
-                int wait;
-                string localErr = holder.Err;
-                holder.Res = GetSweepStatusImpl(out status, out wait, ref localErr);
-                holder.PlSweepStatus = status;
-                holder.PlEstWaitingTime = wait;
-                holder.Err = localErr;
-                return holder.Res;
-            });
-            plSweepStatus = holder.PlSweepStatus;
-            plEstWaitingTime = holder.PlEstWaitingTime;
-            errMsg = holder.Err;
-            return res;
-        }
-
-        private int GetSweepStatusImpl(out int plSweepStatus, out int plEstWaitingTime, ref string errMsg)
-        {
             DeviceHandle.fstpCtrl.GetSweepStatus(deviceGUID,out plSweepStatus,out plEstWaitingTime);
             DeviceHandle.GetUDLMessage(ref errMsg);
             if (errMsg.Length > 0)
@@ -586,38 +503,6 @@ namespace DeviceControl
         /// <param name="errMsg">出错信息</param>
         /// <returns>0--成功，1--出错</returns>
         public int GetMeasureResult(int lPMIndex, out double pdblWL, out double pdblIL, out double pdblPDL, out double pdblTapIL, out int plDataCount, ref string errMsg)
-        {
-            if (UdlStaHost.IsOnHostThread())
-                return GetMeasureResultImpl(lPMIndex, out pdblWL, out pdblIL, out pdblPDL, out pdblTapIL, out plDataCount, ref errMsg);
-
-            var holder = new MeasureResultHolder { Err = errMsg };
-            int res = UdlStaHost.Invoke(() =>
-            {
-                double wl;
-                double il;
-                double pdl;
-                double tapIl;
-                int count;
-                string localErr = holder.Err;
-                holder.Res = GetMeasureResultImpl(lPMIndex, out wl, out il, out pdl, out tapIl, out count, ref localErr);
-                holder.PdblWL = wl;
-                holder.PdblIL = il;
-                holder.PdblPDL = pdl;
-                holder.PdblTapIL = tapIl;
-                holder.PlDataCount = count;
-                holder.Err = localErr;
-                return holder.Res;
-            });
-            pdblWL = holder.PdblWL;
-            pdblIL = holder.PdblIL;
-            pdblPDL = holder.PdblPDL;
-            pdblTapIL = holder.PdblTapIL;
-            plDataCount = holder.PlDataCount;
-            errMsg = holder.Err;
-            return res;
-        }
-
-        private int GetMeasureResultImpl(int lPMIndex, out double pdblWL, out double pdblIL, out double pdblPDL, out double pdblTapIL, out int plDataCount, ref string errMsg)
         {
             DeviceHandle.fstpCtrl.GetMeasureResult(deviceGUID, pwmIdxs[lPMIndex]-1, out pdblWL,out pdblIL,out pdblPDL,out pdblTapIL,out plDataCount);
             DeviceHandle.GetUDLMessage(ref errMsg);
@@ -640,44 +525,6 @@ namespace DeviceControl
         /// <param name="errMsg">出错信息</param>
         /// <returns>0--成功，1--出错</returns>
         public int GetMeasureResultWithTETM(int lPMIndex, out double pdblWL, out double pdblIL, out double pdblPDL, out double pdblTE, out double pdblTM, out double pdblTapIL, out int plDataCount, ref string errMsg)
-        {
-            if (UdlStaHost.IsOnHostThread())
-                return GetMeasureResultWithTETMImpl(lPMIndex, out pdblWL, out pdblIL, out pdblPDL, out pdblTE, out pdblTM, out pdblTapIL, out plDataCount, ref errMsg);
-
-            var holder = new MeasureResultTetmHolder { Err = errMsg };
-            int res = UdlStaHost.Invoke(() =>
-            {
-                double wl;
-                double il;
-                double pdl;
-                double te;
-                double tm;
-                double tapIl;
-                int count;
-                string localErr = holder.Err;
-                holder.Res = GetMeasureResultWithTETMImpl(lPMIndex, out wl, out il, out pdl, out te, out tm, out tapIl, out count, ref localErr);
-                holder.PdblWL = wl;
-                holder.PdblIL = il;
-                holder.PdblPDL = pdl;
-                holder.PdblTE = te;
-                holder.PdblTM = tm;
-                holder.PdblTapIL = tapIl;
-                holder.PlDataCount = count;
-                holder.Err = localErr;
-                return holder.Res;
-            });
-            pdblWL = holder.PdblWL;
-            pdblIL = holder.PdblIL;
-            pdblPDL = holder.PdblPDL;
-            pdblTE = holder.PdblTE;
-            pdblTM = holder.PdblTM;
-            pdblTapIL = holder.PdblTapIL;
-            plDataCount = holder.PlDataCount;
-            errMsg = holder.Err;
-            return res;
-        }
-
-        private int GetMeasureResultWithTETMImpl(int lPMIndex, out double pdblWL, out double pdblIL, out double pdblPDL, out double pdblTE, out double pdblTM, out double pdblTapIL, out int plDataCount, ref string errMsg)
         {
             DeviceHandle.fstpCtrl.GetMeasureResultWithTETM(deviceGUID, pwmIdxs[lPMIndex]-1, out pdblWL, out pdblIL, out pdblPDL,out pdblTE, out pdblTM, out pdblTapIL, out plDataCount);
             DeviceHandle.GetUDLMessage(ref errMsg);

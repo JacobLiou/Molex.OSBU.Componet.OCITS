@@ -86,22 +86,6 @@ namespace DeviceControl
 
         public static bool GetUDLMessage(ref string msg)
         {
-            if (deviceEngine == null)
-            {
-                msg = "";
-                return true;
-            }
-            if (UdlStaHost.IsOnHostThread())
-                return GetUDLMessageOnHost(ref msg);
-
-            string localMsg = "";
-            bool ok = UdlStaHost.Invoke(() => GetUDLMessageOnHost(ref localMsg));
-            msg = localMsg;
-            return ok;
-        }
-
-        private static bool GetUDLMessageOnHost(ref string msg)
-        {
             try
             {
                 string result = "";
@@ -115,40 +99,21 @@ namespace DeviceControl
                 }
                 result = System.Text.Encoding.Default.GetString(bMsg);
                 result = result.Substring(0, result.IndexOf('\0'));
+                //CommonFunction.WriteLog(result);
                 if (result.Length > 7 && result.Substring(0, 8) == "NO ERROR")
                     return true;
-                msg = result;
-                return false;
+                else
+                {
+                    msg = result;
+                    return false;
+                }
+                
             }
             catch (Exception e)
             {
                 msg = e.Message;
                 return false;
             }
-        }
-
-        private static int InitUdlEngineOnHost(string udlConfigPath, out string errMsg)
-        {
-            errMsg = "";
-            deviceEngine = new UDL2_Engine();
-            tccCtrl = new UDL2_TCC();
-            fstpCtrl = new UDL2_FSTP();
-            oswCtrl = new UDL2_OSW();
-            deviceEngine.SetDebugLogFile(Environment.CurrentDirectory + "\\UDLlog.txt");
-            deviceEngine.LoadConfiguration(udlConfigPath);
-            if (!GetUDLMessageOnHost(ref errMsg))
-            {
-                errMsg = "加载UDL配置出错：" + errMsg;
-                return 1;
-            }
-
-            deviceEngine.OpenEngine();
-            if (!GetUDLMessageOnHost(ref errMsg))
-            {
-                errMsg = "UDL Open出错：" + errMsg;
-                return 1;
-            }
-            return 0;
         }
 
         /// <summary>
@@ -164,20 +129,26 @@ namespace DeviceControl
                 EnsureDeviceLists();
                 string udlConfigPath = Environment.CurrentDirectory + "\\set\\UDLConfig.xml";
                 if (!UdlRuntimeConfig.IsUdlEngineLoadDisabled() && File.Exists(udlConfigPath))
-                {
-                    string udlInitErr = "";
-                    int udlInitRes = UdlStaHost.Invoke(() =>
+                {                  
+                    deviceEngine = new UDL2_Engine();
+                    tccCtrl = new UDL2_TCC();
+                    fstpCtrl = new UDL2_FSTP();
+                    oswCtrl = new UDL2_OSW();
+                    deviceEngine.SetDebugLogFile(Environment.CurrentDirectory + "\\UDLlog.txt");
+                    deviceEngine.LoadConfiguration(udlConfigPath);
+                    if (!GetUDLMessage(ref errMsg))
                     {
-                        string e;
-                        int r = InitUdlEngineOnHost(udlConfigPath, out e);
-                        udlInitErr = e;
-                        return r;
-                    });
-                    if (udlInitRes != 0)
-                    {
-                        errMsg = udlInitErr;
-                        return udlInitRes;
+                        errMsg="加载UDL配置出错：" + errMsg;
+                        return 1;
                     }
+                    
+                    deviceEngine.OpenEngine();
+                    if (!GetUDLMessage(ref errMsg))
+                    {
+                        errMsg = "UDL Open出错：" + errMsg;
+                        return 1;
+                    }
+                    
                 }
                 List<string> useNameList;
                 //读取当前配置设备的配置文件

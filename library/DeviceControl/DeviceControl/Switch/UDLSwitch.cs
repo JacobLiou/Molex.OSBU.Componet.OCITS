@@ -10,11 +10,6 @@ namespace DeviceControl
 {
     public class UDLSwitch: IUDLSwitch
     {
-        private sealed class StringRef
-        {
-            public string Value;
-        }
-
         /// <summary>
         /// switch GUID
         /// </summary>
@@ -28,17 +23,6 @@ namespace DeviceControl
         /// <param name="errMsg">出错信息</param>
         /// <returns>0--成功，1--失败，其他--出错信息</returns>
         public int SetSwitchPosition(int comPort, int outPort, ref string errMsg)
-        {
-            if (UdlStaHost.IsOnHostThread())
-                return SetSwitchPositionImpl(comPort, outPort, ref errMsg);
-
-            var errRef = new StringRef { Value = errMsg };
-            int res = UdlStaHost.Invoke(() => SetSwitchPositionImpl(comPort, outPort, ref errRef.Value));
-            errMsg = errRef.Value;
-            return res;
-        }
-
-        private int SetSwitchPositionImpl(int comPort, int outPort, ref string errMsg)
         {
             if(DeviceHandle.oswCtrl == null)
             {
