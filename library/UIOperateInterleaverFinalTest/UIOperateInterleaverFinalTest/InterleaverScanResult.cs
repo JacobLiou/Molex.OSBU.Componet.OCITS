@@ -213,12 +213,20 @@ namespace UIOperateInterleaverFinalTest
         /// <param name="errMsg">出错信息</param>
         public static void WritePDLRefData(string path, double[][] resultData, string spec, int portCount, ref string errMsg)
         {
+            WritePDLRefData(path, resultData, spec, portCount, DateTime.Now, ref errMsg);
+        }
+
+        /// <summary>
+        /// 写入归零文件；refTime 由同一次系统归零会话统一传入，避免各口时间戳不一致。
+        /// </summary>
+        public static void WritePDLRefData(string path, double[][] resultData, string spec, int portCount, DateTime refTime, ref string errMsg)
+        {
             try
             {
                 double[][] res = resultData;
                 FileStream stream = File.Open(path, FileMode.Create);
                 StreamWriter writer = new StreamWriter(stream);
-                string title = string.Format("WL,Power,{0},{1},{2}", DateTime.Now.ToString(), spec, portCount);
+                string title = string.Format("WL,Power,{0},{1},{2}", refTime.ToString(), spec, portCount);
                 writer.WriteLine(title);
                 for (int i = res[0].Length - 1; i >= 0; i--)
                 {

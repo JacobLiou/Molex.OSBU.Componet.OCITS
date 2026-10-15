@@ -103,6 +103,15 @@ namespace UIOperateInterleaverFinalTest
         /// <summary>设温重试间隔（毫秒）</summary>
         private const int TccSetpointRetryDelayMs = 1000;
 
+        /// <summary>设温 UDL 失败后趋势观察窗总时长（毫秒）</summary>
+        private const int TccSetpointTrendObserveMs = 20000;
+
+        /// <summary>趋势观察采样间隔（毫秒）</summary>
+        private const int TccSetpointTrendPollMs = 2000;
+
+        /// <summary>认定朝目标变化的最小温差（°C）</summary>
+        private const double TccSetpointTrendMinDeltaCelsius = 0.3;
+
         /// <summary>操作员对某目标温度选择「通过」的记忆（键=°C×10）</summary>
         private readonly HashSet<int> tccOperatorPassTempKeys = new HashSet<int>();
 
@@ -136,10 +145,19 @@ namespace UIOperateInterleaverFinalTest
         private const int rerefHours = 6;
 
         /// <summary>
-        /// 最老的归零时间，用于4小时归零倒计时
+        /// 最老的归零时间，用于6小时归零倒计时（同批会话统一时间戳）
         /// </summary>
         private DateTime oldestRefTime = new DateTime();
 
+        /// <summary>
+        /// 本次「系统归零」会话写入各口文件的统一时间（取会话开始=第一个口时刻）
+        /// </summary>
+        private DateTime refSessionWriteTime = new DateTime();
+
+        /// <summary>
+        /// 超期已到但因整批 HT 未完成而暂缓清除时，避免刷屏
+        /// </summary>
+        private bool refExpiryClearDeferredNotified = false;
         /// <summary>
         /// 模板是否正确打开，并完成
         /// </summary>
@@ -500,19 +518,114 @@ namespace UIOperateInterleaverFinalTest
 
             if (IsRefTimePassdue(span))
             {
-                for(int i=0;i<portAssistant.Count;i++)
-                {                   
-                    string pdlRefPath = string.Format("{0}-product{1}-port{2}.csv", refWithPDLFile, portAssistant[i].ProductIndex, portAssistant[i].PortIndex);
-                    if (File.Exists(pdlRefPath))
-                        File.Delete(pdlRefPath);
-                    //清除内存归零数据 
-                    InterleaverScanResult.InitRawdataBuffer(portPDLRef[portAssistant[i].OperateIndex]);
-
-                    portAssistant[i].IsRef = false;
-                    UpdateReferenceStatus(portAssistant[i].ProductIndex-1,portAssistant[i]);                                       
+                if (ShouldDeferRefExpiryClear())
+                {
+                    if (!refExpiryClearDeferredNotified)
+                    {
+                        refExpiryClearDeferredNotified = true;
+                        RealtimeMsg("归零已超期，但整批产品尚未完成 HT（或仍在测试中），暂不清除归零数据，以免已测结果失效。请完成 HT 后再系统归零。", StatusType.Warning);
+                    }
+                    return;
                 }
-                oldestRefTime = new DateTime();
+                ClearAllReferenceDataDueToExpiry();
             }
+        }
+
+        /// <summary>
+        /// 超期清除：删文件、清内存、标未归零。仅在允许清除时调用。
+        /// </summary>
+        private void ClearAllReferenceDataDueToExpiry()
+        {
+            for (int i = 0; i < portAssistant.Count; i++)
+            {
+                string pdlRefPath = string.Format("{0}-product{1}-port{2}.csv", refWithPDLFile, portAssistant[i].ProductIndex, portAssistant[i].PortIndex);
+                if (File.Exists(pdlRefPath))
+                    File.Delete(pdlRefPath);
+                InterleaverScanResult.InitRawdataBuffer(portPDLRef[portAssistant[i].OperateIndex]);
+                portAssistant[i].IsRef = false;
+                UpdateReferenceStatus(portAssistant[i].ProductIndex - 1, portAssistant[i]);
+            }
+            oldestRefTime = new DateTime();
+            refSessionWriteTime = new DateTime();
+            refExpiryClearDeferredNotified = false;
+            RealtimeMsg("归零数据已超期并已清除，请重新系统归零。", StatusType.Warning);
+        }
+
+        /// <summary>
+        /// 高温判定（与常温 20~30 相对）：用于「须等 HT 完成再清归零」。
+        /// </summary>
+        private static bool IsHighTemperature(double tmpt)
+        {
+            return tmpt > 30;
+        }
+
+        /// <summary>
+        /// 整批仍在测或 HT 未完成时，禁止因超期删除归零（避免前期测试数据失效）。
+        /// </summary>
+        private bool ShouldDeferRefExpiryClear()
+        {
+            if (!GetIsScanFinished())
+                return true;
+            if (bakeTimeCheckBK != null && bakeTimeCheckBK.IsBusy)
+                return true;
+            if (curBakeStatus == BakeStatus.Baking)
+                return true;
+            if (portAssistant == null || portAssistant.Count == 0)
+                return false;
+
+            bool anyStarted = false;
+            for (int i = 0; i < portAssistant.Count; i++)
+            {
+                if (portAssistant[i].IsTested)
+                {
+                    anyStarted = true;
+                    break;
+                }
+            }
+            if (!anyStarted && allProductControl != null)
+            {
+                for (int i = 0; i < allProductControl.Count; i++)
+                {
+                    if (allProductControl[i].GetHasTested())
+                    {
+                        anyStarted = true;
+                        break;
+                    }
+                }
+            }
+            if (!anyStarted)
+                return false;
+
+            if (TasRuntimeConfig.IsRtOnlyTestMode())
+            {
+                for (int i = 0; i < portAssistant.Count; i++)
+                {
+                    if (IsRoomTemperature(portAssistant[i].TestTmpt) && !portAssistant[i].IsTested)
+                        return true;
+                }
+                return false;
+            }
+
+            bool hasHt = false;
+            for (int i = 0; i < portAssistant.Count; i++)
+            {
+                if (IsHighTemperature(portAssistant[i].TestTmpt))
+                {
+                    hasHt = true;
+                    if (!portAssistant[i].IsTested)
+                        return true;
+                }
+            }
+            // 无 HT 行（如仅 RT/LT）：整批未全部测完也暂缓清除
+            if (!hasHt)
+            {
+                for (int i = 0; i < portAssistant.Count; i++)
+                {
+                    if (!portAssistant[i].IsTested)
+                        return true;
+                }
+            }
+            return false;
         }
 
         private void BakeTimeCheck_DoWork(object sender, DoWorkEventArgs e)
@@ -1573,6 +1686,10 @@ namespace UIOperateInterleaverFinalTest
         {
             //判断为7端口产品，则按七端口产品光路进行归零。
             referenceIndex = 0;
+            // 同批 1~N 口统一归零时间（会话开始=第一个口时刻，不再各口独立 Now）
+            refSessionWriteTime = DateTime.Now;
+            oldestRefTime = refSessionWriteTime;
+            refExpiryClearDeferredNotified = false;
             ScanRef();
         }
 
@@ -1802,21 +1919,55 @@ namespace UIOperateInterleaverFinalTest
         /// </summary>
         private static int GetDemuxOutputChannelForPortIndex(int productIndex, int portIndex)
         {
-            if (productIndex < 1)
-                return -1;
-            if (portIndex == 1)
+            return DemuxScanPortPlanner.GetDemuxOutputChannelForPortIndex(
+                productIndex, portIndex, OpticalSwitchConfigNames.MaxOutputSwitchChannels);
+        }
+
+        private List<ScanPortCandidate> BuildScanPortCandidates()
+        {
+            var list = new List<ScanPortCandidate>();
+            if (portAssistant == null)
+                return list;
+            foreach (PortAssist assist in portAssistant)
             {
-                int evenChannel = productIndex + 16;
-                return (evenChannel >= 1 && evenChannel <= OpticalSwitchConfigNames.MaxOutputSwitchChannels)
-                    ? evenChannel : -1;
+                if (assist == null)
+                    continue;
+                list.Add(new ScanPortCandidate
+                {
+                    ProductIndex = assist.ProductIndex,
+                    PortIndex = assist.PortIndex,
+                    ScanIndex = assist.ScanIndex,
+                    TestTmpt = assist.TestTmpt,
+                    IsTested = assist.IsTested,
+                    PortKey = assist.Port ?? ""
+                });
             }
-            if (portIndex == 2)
+            return list;
+        }
+
+        private DemuxScanPortPlan PlanScanPorts(int productId, double scanTmpt, int seedScanIndex)
+        {
+            return DemuxScanPortPlanner.CollectPortsForScan(
+                BuildScanPortCandidates(),
+                productId,
+                scanTmpt,
+                seedScanIndex,
+                IsDemuxDualPortTemplate());
+        }
+
+        /// <summary>
+        /// 扫前按 PortIndex 升序逐口切开关（Demux Even+Odd 双 OUT 同时到位）。
+        /// </summary>
+        private bool TrySetSwitchesBeforeScan(int productIndex, IList<string> portKeys)
+        {
+            if (portKeys == null || portKeys.Count == 0)
+                return false;
+            foreach (string portKey in portKeys)
             {
-                int oddChannel = productIndex;
-                return (oddChannel >= 1 && oddChannel <= OpticalSwitchConfigNames.MaxOutputSwitchChannels)
-                    ? oddChannel : -1;
+                if (!TrySetSwitchBeforeScan(productIndex, portKey))
+                    return false;
             }
-            return -1;
+            return true;
         }
 
         /// <summary>
@@ -2300,84 +2451,115 @@ namespace UIOperateInterleaverFinalTest
         }
 
         /// <summary>
-        /// 读取归零数据
+        /// 读取归零数据。单口失败 continue 扫完再汇总；同产品任一口无效则整组标未归零。
         /// </summary>
         /// <param name="errMsg"></param>
         private void ReadRefData(int productIndex,List<PortAssist> assists, ref string errMsg)
         {
             try
             {
-                string productSpec = "";
+                bool anyInvalid = false;
+                List<string> failReasons = new List<string>();
+                DateTime defaultTime = new DateTime();
                 for(int i=0;i<assists.Count;i++)
                 {
-                    //productIndex = assists[i].ProductIndex - 1;
-                    productSpec = allProductControl[productIndex].GetProductInfo().Spec;
                     if (assists[i].ProductIndex != productIndex+1)
                         continue;
                     string pdlRefPath = string.Format("{0}-product{1}-port{2}.csv", refWithPDLFile, productIndex + 1, assists[i].PortIndex);
+                    string portLabel = string.Format("product{0}-port{1}", productIndex + 1, assists[i].PortIndex);
 
                     int refCount = 0;
-                    if (InterleaverScanResult.ReadRefPortCount(pdlRefPath, ref refCount, ref errMsg) != 0)
+                    string localErr = "";
+                    if (InterleaverScanResult.ReadRefPortCount(pdlRefPath, ref refCount, ref localErr) != 0)
                     {
                         assists[i].IsRef = false;
-                        return;
+                        anyInvalid = true;
+                        AddStrToList(ref failReasons, portLabel + ": 无有效归零文件");
+                        continue;
                     }
                     DateTime refTime = new DateTime();
                     DateTime curTime = DateTime.Now;
-                    DateTime defaultTime = new DateTime();
-                    if (InterleaverScanResult.ReadRefTime(pdlRefPath,ref refTime,ref errMsg)!=0)
+                    localErr = "";
+                    if (InterleaverScanResult.ReadRefTime(pdlRefPath,ref refTime,ref localErr)!=0)
                     {
                         assists[i].IsRef = false;
-                        return;
+                        anyInvalid = true;
+                        AddStrToList(ref failReasons, portLabel + ": 无法读取归零时间");
+                        continue;
                     }
                     TimeSpan refSpan = curTime - refTime;
                     int refIndex = productIndex * portAndNameDic.Count  + assists[i].PortIndex - 1;
                     if (IsRefTimePassdue(refSpan))
                     {
                         assists[i].IsRef = false;
-                        errMsg = "归零数据超过6小时，需要重新归零！";
-                        //清除内存归零数据 
-                        InterleaverScanResult.InitRawdataBuffer(portPDLRef[refIndex]);
-                        return;
-                    }
-
-                    if (portPDLRef[refIndex] !=null)
-                    {
-                        if (portAndNameDic.Count != refCount)
-                        {
-                            //提示归零数据不正确，需要重新归零？
-                            assists[i].IsRef = false;
-                            errMsg = "归零数据与模板不一致，需要重新归零！";
-                            return;
-                        }                       
-
-                        //读取PDL的归零数据
-                        int pdlRef = InterleaverScanResult.ReadScanData(pdlRefPath, portPDLRef[refIndex], ref errMsg);
-                        double[] fres = portPDLRef[refIndex][6];
-                        if(fres[fres.Length - 1] <maxScanFre||fres[0]>minScanFre)
-                        {
-                            errMsg = "测试频率超出归零频率，请确认服务器扫描范围!";
-                            //清除内存归零数据 
+                        anyInvalid = true;
+                        AddStrToList(ref failReasons, portLabel + ": 归零超过6小时");
+                        if (refIndex >= 0 && refIndex < portPDLRef.Count && portPDLRef[refIndex] != null)
                             InterleaverScanResult.InitRawdataBuffer(portPDLRef[refIndex]);
-                            return;
-                        }
-                        //四个归零时间中，最老的时间用来做倒计时
-                        if (oldestRefTime.Equals(defaultTime) || oldestRefTime.CompareTo(refTime) > 0)
-                        {
-                            oldestRefTime = refTime;
-                        }
-                        if (pdlRef==0)
-                        {
-                            assists[i].IsRef = true;
-                        }
+                        continue;
                     }
+
+                    if (refIndex < 0 || refIndex >= portPDLRef.Count || portPDLRef[refIndex] == null)
+                    {
+                        assists[i].IsRef = false;
+                        anyInvalid = true;
+                        AddStrToList(ref failReasons, portLabel + ": 归零缓冲未初始化");
+                        continue;
+                    }
+
+                    if (portAndNameDic.Count != refCount)
+                    {
+                        assists[i].IsRef = false;
+                        anyInvalid = true;
+                        AddStrToList(ref failReasons, portLabel + ": 归零数据与模板不一致");
+                        continue;
+                    }
+
+                    localErr = "";
+                    int pdlRef = InterleaverScanResult.ReadScanData(pdlRefPath, portPDLRef[refIndex], ref localErr);
+                    double[] fres = portPDLRef[refIndex][6];
+                    if (fres == null || fres.Length == 0 || fres[fres.Length - 1] < maxScanFre || fres[0] > minScanFre)
+                    {
+                        assists[i].IsRef = false;
+                        anyInvalid = true;
+                        AddStrToList(ref failReasons, portLabel + ": 测试频率超出归零频率");
+                        InterleaverScanResult.InitRawdataBuffer(portPDLRef[refIndex]);
+                        continue;
+                    }
+                    if (pdlRef != 0)
+                    {
+                        assists[i].IsRef = false;
+                        anyInvalid = true;
+                        AddStrToList(ref failReasons, portLabel + ": 读取归零数据失败");
+                        continue;
+                    }
+
+                    if (oldestRefTime.Equals(defaultTime) || oldestRefTime.CompareTo(refTime) > 0)
+                        oldestRefTime = refTime;
+                    assists[i].IsRef = true;
                 }
-                
+
+                if (anyInvalid)
+                {
+                    for (int i = 0; i < assists.Count; i++)
+                    {
+                        if (assists[i].ProductIndex == productIndex + 1)
+                            assists[i].IsRef = false;
+                    }
+                    errMsg = "存在无效归零，请整组重新系统归零。"
+                        + (failReasons.Count > 0 ? (" " + string.Join("; ", failReasons.ToArray())) : "");
+                    RealtimeMsg(errMsg, StatusType.Warning);
+                }
             }
             catch (Exception ex)
             {
                 errMsg += System.Reflection.MethodBase.GetCurrentMethod().DeclaringType.FullName + "."
                     + System.Reflection.MethodBase.GetCurrentMethod().Name + " error:" + ex.Message + "\r";
+                for (int i = 0; i < assists.Count; i++)
+                {
+                    if (assists[i].ProductIndex == productIndex + 1)
+                        assists[i].IsRef = false;
+                }
                 return;
             }
         }
@@ -2467,7 +2649,7 @@ namespace UIOperateInterleaverFinalTest
                             InterleaverScanResult.InitRawdataBuffer(portPDLRef[refIndex]);
                             return 2;
                         }
-                        InterleaverScanResult.WritePDLRefData(pdlRefPath, portPDLRef[refIndex], allProductControl[CurProductIndex].GetProductInfo().Spec, portAndNameDic.Count, ref errMsg);
+                        InterleaverScanResult.WritePDLRefData(pdlRefPath, portPDLRef[refIndex], allProductControl[CurProductIndex].GetProductInfo().Spec, portAndNameDic.Count, GetRefSessionWriteTime(), ref errMsg);
                     }
 
                 }
@@ -2573,7 +2755,7 @@ namespace UIOperateInterleaverFinalTest
                     }
 
                     string pdlRefPath = string.Format("{0}-product{1}-port{2}.csv", refWithPDLFile, CurProductIndex + 1, scanInfo.Ports[0]);
-                    InterleaverScanResult.WritePDLRefData(pdlRefPath, portPDLRef[refIndex], allProductControl[CurProductIndex].GetProductInfo().Spec, portAndNameDic.Count, ref errMsg);
+                    InterleaverScanResult.WritePDLRefData(pdlRefPath, portPDLRef[refIndex], allProductControl[CurProductIndex].GetProductInfo().Spec, portAndNameDic.Count, GetRefSessionWriteTime(), ref errMsg);
 
                 }
                
@@ -3376,6 +3558,16 @@ namespace UIOperateInterleaverFinalTest
         }
 
         /// <summary>
+        /// 系统归零会话统一时间；若未开始会话则取 Now（兜底）。
+        /// </summary>
+        private DateTime GetRefSessionWriteTime()
+        {
+            if (refSessionWriteTime.Equals(new DateTime()))
+                refSessionWriteTime = DateTime.Now;
+            return refSessionWriteTime;
+        }
+
+        /// <summary>
         /// RtOnlyTest 模式下仅允许常温；否则不限制。
         /// </summary>
         private static bool IsTestTemperatureAllowed(double tmpt)
@@ -3493,16 +3685,134 @@ namespace UIOperateInterleaverFinalTest
             return MessageBox.Show(text, title, MessageBoxButton.YesNoCancel, MessageBoxImage.Warning);
         }
 
+        /// <summary>
+        /// LT/HT 扫前门禁：不允许「通过继续测」。是=重试，否=终止。
+        /// </summary>
+        private static MessageBoxResult ShowTccGateRetryOrAbortDialog(string title, string detail)
+        {
+            string text = (detail ?? "") + "\r\n\r\n是 = 重试\r\n否 = 终止（不可未控温继续测试）";
+            return MessageBox.Show(text, title, MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        }
+
+        /// <summary>
+        /// 读温失败点「通过」时：仅常温允许跳过烤温；LT/HT 必须仍走设温+烤温。
+        /// </summary>
+        private static bool CanSkipBakeAfterOperatorPass(double targetTmpt)
+        {
+            return IsRoomTemperature(targetTmpt);
+        }
+
         private static bool IsChamberMovingTowardTarget(double targetTmpt, double actualTmpt, double fromTmpt)
         {
+            double minDelta = TccSetpointTrendMinDeltaCelsius;
             double distBefore = Math.Abs(fromTmpt - targetTmpt);
             double distAfter = Math.Abs(actualTmpt - targetTmpt);
-            if (distAfter + 0.05 < distBefore)
+            if (distAfter + minDelta <= distBefore)
                 return true;
-            if (targetTmpt > fromTmpt && actualTmpt > fromTmpt + 0.05)
+            if (targetTmpt > fromTmpt && actualTmpt >= fromTmpt + minDelta)
                 return true;
-            if (targetTmpt < fromTmpt && actualTmpt < fromTmpt - 0.05)
+            if (targetTmpt < fromTmpt && actualTmpt <= fromTmpt - minDelta)
                 return true;
+            return false;
+        }
+
+        /// <summary>
+        /// 设温基准温度：禁止等于 target（否则趋势判定失效）。优先实测，其次有效 curTestTmpt，否则常温 25。
+        /// </summary>
+        private double ResolveSetpointFromTmpt(double targetTmpt, bool hasActualReading, double actualTmpt)
+        {
+            if (hasActualReading)
+                return actualTmpt;
+            if (curTestTmpt > -299 && Math.Abs(curTestTmpt - targetTmpt) > 0.001)
+                return curTestTmpt;
+            if (curTestTmpt > -299)
+                return curTestTmpt;
+            const double roomDefault = 25;
+            if (Math.Abs(roomDefault - targetTmpt) > 0.001)
+                return roomDefault;
+            // 目标即常温且无历史温：略偏开，仅用于趋势方向参考
+            return roomDefault + 1;
+        }
+
+        /// <summary>
+        /// 设温 UDL 失败后短时多点读温：接近目标或朝目标变化则视为设温已生效。
+        /// </summary>
+        private bool TryObserveChamberTrendAfterSetFail(
+            IUDLTCC tcc, double targetTmpt, double fromTmpt, string setErr, out double lastActual)
+        {
+            lastActual = fromTmpt;
+            if (tcc == null)
+                return false;
+
+            int deadlineTick = Environment.TickCount + TccSetpointTrendObserveMs;
+            double? prevSample = null;
+            double adjacentToward = 0;
+            int sampleIndex = 0;
+            int readOkCount = 0;
+
+            while (true)
+            {
+                sampleIndex++;
+                double actual = 0;
+                string readErr = "";
+                // 单次读温：失败则跳过该点，不把观察窗耗在内层重试上
+                int readRes = tcc.GetCurrentTemp(out actual, ref readErr);
+                if (readRes == 0)
+                {
+                    readOkCount++;
+                    lastActual = actual;
+
+                    if (Math.Abs(actual - targetTmpt) <= TccTempToleranceCelsius)
+                    {
+                        CommonFunction.WriteLog(string.Format(
+                            "TCC SetTempSetpoint fail but heating toward target: from={0:F1}, actual={1:F1}, target={2:F1}, samples={3}, readOk={4}, reason=nearTarget, err={5}",
+                            fromTmpt, actual, targetTmpt, sampleIndex, readOkCount, setErr));
+                        return true;
+                    }
+
+                    if (IsChamberMovingTowardTarget(targetTmpt, actual, fromTmpt))
+                    {
+                        CommonFunction.WriteLog(string.Format(
+                            "TCC SetTempSetpoint fail but heating toward target: from={0:F1}, actual={1:F1}, target={2:F1}, samples={3}, readOk={4}, reason=fromBaseline, err={5}",
+                            fromTmpt, actual, targetTmpt, sampleIndex, readOkCount, setErr));
+                        return true;
+                    }
+
+                    if (prevSample.HasValue)
+                    {
+                        double prev = prevSample.Value;
+                        if (targetTmpt > fromTmpt && actual > prev)
+                            adjacentToward += (actual - prev);
+                        else if (targetTmpt < fromTmpt && actual < prev)
+                            adjacentToward += (prev - actual);
+
+                        if (adjacentToward >= TccSetpointTrendMinDeltaCelsius)
+                        {
+                            CommonFunction.WriteLog(string.Format(
+                                "TCC SetTempSetpoint fail but heating toward target: from={0:F1}, actual={1:F1}, target={2:F1}, samples={3}, readOk={4}, reason=adjacentDelta={5:F2}, err={6}",
+                                fromTmpt, actual, targetTmpt, sampleIndex, readOkCount, adjacentToward, setErr));
+                            return true;
+                        }
+                    }
+                    prevSample = actual;
+                }
+                else
+                {
+                    CommonFunction.WriteLog(string.Format(
+                        "TCC setpoint trend observe read fail ({0}): {1}", sampleIndex, readErr));
+                }
+
+                int remaining = deadlineTick - Environment.TickCount;
+                if (remaining <= 0)
+                    break;
+                Thread.Sleep(Math.Min(TccSetpointTrendPollMs, Math.Max(remaining, 1)));
+                if (Environment.TickCount - deadlineTick >= 0)
+                    break;
+            }
+
+            CommonFunction.WriteLog(string.Format(
+                "TCC setpoint trend observe exhausted: from={0:F1}, last={1:F1}, target={2:F1}, samples={3}, readOk={4}, setErr={5}",
+                fromTmpt, lastActual, targetTmpt, sampleIndex, readOkCount, setErr));
             return false;
         }
 
@@ -3539,8 +3849,8 @@ namespace UIOperateInterleaverFinalTest
         }
 
         /// <summary>
-        /// 读温：失败或与目标差 &gt; ±2°C 时三按钮（通过/重试/取消）；同温可记忆通过。
-        /// 温差大选「通过」：记忆并通过（调用方不再强制烤温，走校验/扫描）。
+        /// 读温成功则返回实测（含与目标差 &gt; ±2°C）。温差不在此处弹框，由调用方设温并烤温。
+        /// 读温失败时三按钮（通过/重试/取消）。LT/HT：点「通过」不跳过烤温；常温才允许 skipBake。通过记忆不放行扫前门禁。
         /// </summary>
         private TccOperatorDecision TryReadChamberTemperatureWithOperatorConfirm(
             IUDLTCC tcc, double targetTmpt, out double actual, out bool hasActualReading, out bool skipBakeByOperator, ref string errMsg)
@@ -3554,9 +3864,12 @@ namespace UIOperateInterleaverFinalTest
                 if (IsTccOperatorPassRemembered(targetTmpt))
                 {
                     hasActualReading = false;
-                    skipBakeByOperator = true;
+                    // 仅常温可跳过烤温；LT/HT 记忆只跳过读温弹窗，仍须设温+烤温
+                    skipBakeByOperator = CanSkipBakeAfterOperatorPass(targetTmpt);
                     errMsg = "";
-                    RealtimeMsg(string.Format("循环箱读温：目标 {0:F1}°C 已有操作员通过记忆。", targetTmpt), StatusType.Warning);
+                    RealtimeMsg(string.Format(
+                        "循环箱读温：目标 {0:F1}°C 已有操作员通过记忆（{1}）。",
+                        targetTmpt, skipBakeByOperator ? "常温跳过烤温" : "LT/HT 仍须烤温"), StatusType.Warning);
                     return TccOperatorDecision.OperatorPass;
                 }
 
@@ -3571,22 +3884,11 @@ namespace UIOperateInterleaverFinalTest
                         return TccOperatorDecision.Success;
                     }
 
-                    string detail = string.Format(
-                        "循环箱实测温度与模板目标差异较大。\r\n模板要求:{0:F1}°C\r\n当前实测:{1:F1}°C\r\n允许偏差:±{2:F1}°C",
-                        targetTmpt, actual, TccTempToleranceCelsius);
-                    RealtimeMsg(detail, StatusType.Warning);
-                    MessageBoxResult boxDelta = ShowTccOperatorConfirmDialog("循环箱温差确认", detail);
-                    if (boxDelta == MessageBoxResult.Yes)
-                    {
-                        // 通过=确认温差并继续（通常进入烤温）；不写入「门禁通过」记忆，烤温后仍须 ±2 校验
-                        errMsg = "";
-                        return TccOperatorDecision.Success;
-                    }
-                    if (boxDelta == MessageBoxResult.Cancel)
-                        return TccOperatorDecision.Abort;
-                    operatorRetryRound++;
-                    Thread.Sleep(Math.Min(TccReadRetryDelayMs * (1 + operatorRetryRound), 3000));
-                    continue;
+                    errMsg = "";
+                    RealtimeMsg(string.Format(
+                        "循环箱当前 {0:F1}°C，目标 {1:F1}°C，温差超过 ±{2:F1}°C，将设温并烤温。",
+                        actual, targetTmpt, TccTempToleranceCelsius), StatusType.Warning);
+                    return TccOperatorDecision.Success;
                 }
 
                 string failDetail = string.Format(
@@ -3598,8 +3900,13 @@ namespace UIOperateInterleaverFinalTest
                 {
                     RememberTccOperatorPass(targetTmpt);
                     hasActualReading = false;
-                    skipBakeByOperator = true;
+                    skipBakeByOperator = CanSkipBakeAfterOperatorPass(targetTmpt);
                     errMsg = "";
+                    if (!skipBakeByOperator)
+                    {
+                        RealtimeMsg(string.Format(
+                            "读温已通过，但目标 {0:F1}°C 非常温，仍将设温并烤温。", targetTmpt), StatusType.Warning);
+                    }
                     return TccOperatorDecision.OperatorPass;
                 }
                 if (box == MessageBoxResult.Cancel)
@@ -3642,19 +3949,14 @@ namespace UIOperateInterleaverFinalTest
         }
 
         /// <summary>
-        /// 扫前 ±2°C 门禁；不通过时三按钮（通过继续测 / 重试 / 取消）。
+        /// 扫前 ±2°C 门禁。常温：可通过/重试/终止；LT/HT：仅重试/终止（禁止未控温继续测）。
+        /// 读温「通过记忆」不再放行本门禁。
         /// </summary>
         private TccOperatorDecision TryValidateChamberTemperatureWithConfirm(double requiredTmpt, out string message)
         {
             message = "";
             while (true)
             {
-                if (IsTccOperatorPassRemembered(requiredTmpt))
-                {
-                    message = string.Format("目标 {0:F1}°C 已有操作员通过记忆。", requiredTmpt);
-                    return TccOperatorDecision.OperatorPass;
-                }
-
                 double actual;
                 if (TryValidateChamberTemperature(requiredTmpt, out message, out actual))
                 {
@@ -3662,14 +3964,24 @@ namespace UIOperateInterleaverFinalTest
                     return TccOperatorDecision.Success;
                 }
 
-                MessageBoxResult box = ShowTccOperatorConfirmDialog("循环箱温度校验", message);
-                if (box == MessageBoxResult.Yes)
+                if (IsRoomTemperature(requiredTmpt))
                 {
-                    RememberTccOperatorPass(requiredTmpt);
-                    return TccOperatorDecision.OperatorPass;
+                    MessageBoxResult box = ShowTccOperatorConfirmDialog("循环箱温度校验", message);
+                    if (box == MessageBoxResult.Yes)
+                    {
+                        RememberTccOperatorPass(requiredTmpt);
+                        return TccOperatorDecision.OperatorPass;
+                    }
+                    if (box == MessageBoxResult.Cancel)
+                        return TccOperatorDecision.Abort;
+                    continue;
                 }
-                if (box == MessageBoxResult.Cancel)
-                    return TccOperatorDecision.Abort;
+
+                // LT/HT：不允许「通过继续测」
+                MessageBoxResult gate = ShowTccGateRetryOrAbortDialog("循环箱温度校验", message);
+                if (gate == MessageBoxResult.Yes)
+                    continue;
+                return TccOperatorDecision.Abort;
             }
         }
 
@@ -3715,74 +4027,54 @@ namespace UIOperateInterleaverFinalTest
         }
 
         /// <summary>
-        /// 设温：重试；失败后若朝目标升温则视为成功；否则三按钮。
+        /// 设温：重试；失败后短时多点观察朝目标趋势则视为成功；
+        /// 仍失败则静默继续烤温（不弹框、不停三温），保障产能。
         /// </summary>
         private TccOperatorDecision TrySetChamberSetpointWithOperatorConfirm(
             IUDLTCC tcc, double targetTmpt, double fromTmpt, ref string errMsg)
         {
-            if (IsTccOperatorPassRemembered(targetTmpt))
+            // 常温读温「通过记忆」可跳过设温；LT/HT 记忆不跳过设温（避免未控温开测）
+            if (IsTccOperatorPassRemembered(targetTmpt) && CanSkipBakeAfterOperatorPass(targetTmpt))
             {
                 errMsg = "";
-                RealtimeMsg(string.Format("设温：目标 {0:F1}°C 已有操作员通过记忆。", targetTmpt), StatusType.Warning);
+                RealtimeMsg(string.Format("设温：目标 {0:F1}°C 已有操作员通过记忆（常温）。", targetTmpt), StatusType.Warning);
                 return TccOperatorDecision.OperatorPass;
             }
 
-            int operatorRetryRound = 0;
-            while (true)
+            for (int attempt = 1; attempt <= TccSetpointMaxAttempts; attempt++)
             {
-                for (int attempt = 1; attempt <= TccSetpointMaxAttempts; attempt++)
+                errMsg = "";
+                if (TrySetChamberSetpointOnce(tcc, targetTmpt, ref errMsg))
                 {
                     errMsg = "";
-                    if (TrySetChamberSetpointOnce(tcc, targetTmpt, ref errMsg))
-                    {
-                        errMsg = "";
-                        return TccOperatorDecision.Success;
-                    }
-
-                    // Set 失败：读实测，朝目标升温则成功（不苛求 Get 设定值）
-                    double actual = 0;
-                    string readErr = "";
-                    if (TryReadChamberTemperature(tcc, out actual, ref readErr) == 0
-                        && IsChamberMovingTowardTarget(targetTmpt, actual, fromTmpt))
-                    {
-                        CommonFunction.WriteLog(string.Format(
-                            "TCC SetTempSetpoint fail but heating toward target: from={0:F1}, actual={1:F1}, target={2:F1}, err={3}",
-                            fromTmpt, actual, targetTmpt, errMsg));
-                        RealtimeMsg(string.Format(
-                            "设温回报失败，但实测 {0:F1}°C 已朝 {1:F1}°C 变化，继续烤温。",
-                            actual, targetTmpt), StatusType.Warning);
-                        errMsg = "";
-                        return TccOperatorDecision.Success;
-                    }
-
-                    CommonFunction.WriteLog(string.Format(
-                        "TCC SetTempSetpoint fail ({0}/{1}): {2}", attempt, TccSetpointMaxAttempts, errMsg));
-                    if (attempt < TccSetpointMaxAttempts)
-                        Thread.Sleep(TccSetpointRetryDelayMs);
+                    return TccOperatorDecision.Success;
                 }
 
-                string detail = string.Format(
-                    "循环箱设置温度失败:{0:F1}°C\r\n{1}",
-                    targetTmpt, string.IsNullOrEmpty(errMsg) ? "未知错误" : errMsg);
-                RealtimeMsg(detail, StatusType.Error);
-                MessageBoxResult box = ShowTccOperatorConfirmDialog("循环箱设温", detail);
-                if (box == MessageBoxResult.Yes)
+                // Set 失败：观察窗内多点读温，朝目标变化则成功（不苛求 Get 设定值）
+                double actual = 0;
+                if (TryObserveChamberTrendAfterSetFail(tcc, targetTmpt, fromTmpt, errMsg, out actual))
                 {
-                    RememberTccOperatorPass(targetTmpt);
+                    RealtimeMsg(string.Format(
+                        "设温回报失败，但实测 {0:F1}°C 已朝 {1:F1}°C 变化，继续烤温。",
+                        actual, targetTmpt), StatusType.Warning);
                     errMsg = "";
-                    return TccOperatorDecision.OperatorPass;
+                    return TccOperatorDecision.Success;
                 }
-                if (box == MessageBoxResult.Cancel)
-                    return TccOperatorDecision.Abort;
 
-                operatorRetryRound++;
-                Thread.Sleep(Math.Min(TccSetpointRetryDelayMs * (1 + operatorRetryRound), 5000));
-                // 重试前刷新 fromTmpt
-                double refreshed;
-                string re = "";
-                if (TryReadChamberTemperature(tcc, out refreshed, ref re) == 0)
-                    fromTmpt = refreshed;
+                CommonFunction.WriteLog(string.Format(
+                    "TCC SetTempSetpoint fail ({0}/{1}): {2}", attempt, TccSetpointMaxAttempts, errMsg));
+                if (attempt < TccSetpointMaxAttempts)
+                    Thread.Sleep(TccSetpointRetryDelayMs);
             }
+
+            // 静默稳产能：仍进入烤温；开扫前 LT/HT 门禁禁止「通过继续」
+            string detail = string.Format(
+                "循环箱设置温度失败(已静默继续烤温):{0:F1}°C，{1}",
+                targetTmpt, string.IsNullOrEmpty(errMsg) ? "未知错误" : errMsg);
+            CommonFunction.WriteLog("TCC SetTempSetpoint silent continue: " + detail);
+            RealtimeMsg(detail, StatusType.Warning);
+            errMsg = "";
+            return TccOperatorDecision.Success;
         }
 
         /// <summary>
@@ -3802,11 +4094,11 @@ namespace UIOperateInterleaverFinalTest
             }
 
             const double roomSetpoint = 25;
-            double fromTmpt = 25;
+            double fromTmpt = ResolveSetpointFromTmpt(roomSetpoint, false, 0);
             double actual;
             string readErr = "";
             if (TryReadChamberTemperature(tccCtrl, out actual, ref readErr) == 0)
-                fromTmpt = actual;
+                fromTmpt = ResolveSetpointFromTmpt(roomSetpoint, true, actual);
 
             TccOperatorDecision decision = TrySetChamberSetpointWithOperatorConfirm(tccCtrl, roomSetpoint, fromTmpt, ref errMsg);
             if (decision == TccOperatorDecision.Abort)
@@ -3877,7 +4169,7 @@ namespace UIOperateInterleaverFinalTest
             bool hasActualReading = false;
             bool skipBakeByOperator = false;
             double actualTmpt = 0;
-            double fromTmpt = targetTmpt;
+            double fromTmpt = ResolveSetpointFromTmpt(targetTmpt, false, 0);
 
             if (hasTcc)
             {
@@ -3885,14 +4177,14 @@ namespace UIOperateInterleaverFinalTest
                     tccCtrl, targetTmpt, out actualTmpt, out hasActualReading, out skipBakeByOperator, ref errMsg);
                 if (readDecision == TccOperatorDecision.Abort)
                 {
-                    RealtimeMsg("操作员终止：循环箱读温/温差确认。", StatusType.Error);
+                    RealtimeMsg("操作员终止：循环箱读温。", StatusType.Error);
                     RestoreUiOnChamberFail(restoreOnekeyUiOnFail);
                     UIControl.IsScanEnable = true;
                     return false;
                 }
+                fromTmpt = ResolveSetpointFromTmpt(targetTmpt, hasActualReading, actualTmpt);
                 if (hasActualReading)
                 {
-                    fromTmpt = actualTmpt;
                     RealtimeMsg(string.Format("读取循环箱温度:{0:F1}°C", actualTmpt));
                 }
                 else if (readDecision == TccOperatorDecision.OperatorPass)
@@ -3920,7 +4212,18 @@ namespace UIOperateInterleaverFinalTest
                 return false;
             }
 
-            RealtimeMsg(string.Format("开始进行 {0:F1}°C 拷温", targetTmpt));
+            if (hasActualReading)
+            {
+                RealtimeMsg(string.Format(
+                    "开始进行 {0:F1}°C 拷温，当前实测 {1:F1}°C，烤温 {2:F0} 分钟",
+                    targetTmpt, actualTmpt, soakMinutes));
+            }
+            else
+            {
+                RealtimeMsg(string.Format(
+                    "开始进行 {0:F1}°C 拷温，烤温 {1:F0} 分钟",
+                    targetTmpt, soakMinutes));
+            }
             TccOperatorDecision setDecision = TrySetChamberSetpointWithOperatorConfirm(
                 tccCtrl, targetTmpt, fromTmpt, ref errMsg);
             if (setDecision == TccOperatorDecision.Abort)
@@ -4343,27 +4646,17 @@ namespace UIOperateInterleaverFinalTest
                 UIControl.IsSaveEnable = true;
                 return;
             }
-            //获取同时扫描的端口号。
-            //进光端一样，则可以一起扫描，比如in-to,in-te,in-moni同时扫描
-            // Demux Even/Odd 出光路径不同，与归零一致：每次只测当前排队口，不按 ScanIndex 合并。
-            string testPortName = portAssistant[i].Port;
+            // 同温同产品合并扫描口：Demux Even+Odd 一次扫；非 Demux 按 ScanIndex 合并
+            DemuxScanPortPlan portPlan = PlanScanPorts(productID, scanTmpt, scanIndex);
+            if (portPlan.PortIndexes.Count == 0)
+            {
+                WarningBox("未找到可扫描端口。");
+                UIControl.IsScanEnable = true;
+                UIControl.IsSaveEnable = true;
+                return;
+            }
             scanDetailInfo.Ports.Clear();
-            if (IsDemuxDualPortTemplate())
-            {
-                scanDetailInfo.Ports.Add(portAssistant[i].PortIndex);
-            }
-            else
-            {
-                foreach (PortAssist assist in portAssistant)
-                {
-                    if (productID == assist.ProductIndex && scanIndex == assist.ScanIndex
-                        && scanTmpt == assist.TestTmpt)
-                    {
-                        testPortName = assist.Port;
-                        scanDetailInfo.Ports.Add(assist.PortIndex);
-                    }
-                }
-            }
+            scanDetailInfo.Ports.AddRange(portPlan.PortIndexes);
             scanDetailInfo.ProductIndex = productID;
             string errMsg = "";
             if (!IsScanRef(scanDetailInfo.Ports, ref errMsg))
@@ -4371,7 +4664,7 @@ namespace UIOperateInterleaverFinalTest
                 WarningBox(errMsg);
                 return;
             }
-            if (!TrySetSwitchBeforeScan(productID, testPortName))
+            if (!TrySetSwitchesBeforeScan(productID, portPlan.PortKeysInSwitchOrder))
             {
                 UIControl.IsScanEnable = true;
                 UIControl.IsSaveEnable = true;
@@ -4443,7 +4736,7 @@ namespace UIOperateInterleaverFinalTest
         }
 
         /// <summary>
-        /// 单项测试扫完一路后：同温度同产品继续测下一路（Demux Even/Odd 串行）。
+        /// 单项测试扫完后：同温度同产品若仍有未测口则继续（Demux 同温一次双口后通常直接结束）。
         /// </summary>
         /// <returns>true 表示已启动下一扫</returns>
         private bool ContinueSingleScanSameTemperature()
@@ -4473,24 +4766,15 @@ namespace UIOperateInterleaverFinalTest
             }
 
             int scanIndex = portAssistant[i].ScanIndex;
-            string testPortName = portAssistant[i].Port;
+            DemuxScanPortPlan portPlan = PlanScanPorts(productID, scanTmpt, scanIndex);
+            if (portPlan.PortIndexes.Count == 0)
+            {
+                singleScanSameTmptActive = false;
+                RealtimeMsg(string.Format("单项测试完成（温度 {0:F1}°C，两路已测）", scanTmpt));
+                return false;
+            }
             scanDetailInfo.Ports.Clear();
-            if (IsDemuxDualPortTemplate())
-            {
-                scanDetailInfo.Ports.Add(portAssistant[i].PortIndex);
-            }
-            else
-            {
-                foreach (PortAssist assist in portAssistant)
-                {
-                    if (productID == assist.ProductIndex && scanIndex == assist.ScanIndex
-                        && scanTmpt == assist.TestTmpt)
-                    {
-                        testPortName = assist.Port;
-                        scanDetailInfo.Ports.Add(assist.PortIndex);
-                    }
-                }
-            }
+            scanDetailInfo.Ports.AddRange(portPlan.PortIndexes);
             scanDetailInfo.ProductIndex = productID;
             string errMsg = "";
             if (!IsScanRef(scanDetailInfo.Ports, ref errMsg))
@@ -4499,7 +4783,7 @@ namespace UIOperateInterleaverFinalTest
                 singleScanSameTmptActive = false;
                 return false;
             }
-            if (!TrySetSwitchBeforeScan(productID, testPortName))
+            if (!TrySetSwitchesBeforeScan(productID, portPlan.PortKeysInSwitchOrder))
             {
                 singleScanSameTmptActive = false;
                 return false;
@@ -4549,31 +4833,6 @@ namespace UIOperateInterleaverFinalTest
                     return;
                 }
 
-                string testPortName = switchAssist.Port;
-                if (IsDemuxDualPortTemplate())
-                {
-                    scanDetailInfo.Ports.Add(switchAssist.PortIndex);
-                }
-                else
-                {
-                    int scanIndex = switchAssist.ScanIndex;
-                    foreach (PortAssist assist in portAssistant)
-                    {
-                        if ((selectItem.ProductIndex + 1) == assist.ProductIndex && scanIndex == assist.ScanIndex
-                            && selectTestItem.Temperature == assist.TestTmpt)
-                        {
-                            scanDetailInfo.Ports.Add(assist.PortIndex);
-                        }
-                    }
-                }
-
-                string errMsg = "";
-                if (!IsScanRef(scanDetailInfo.Ports, ref errMsg))
-                {
-                    WarningBox(errMsg);
-                    return;
-                }
-
                 double testTmpt = selectTestItem.Temperature;
                 RealtimeMsg(string.Format("当前测试温度:{0}", testTmpt));
                 if (!IsTestTemperatureAllowed(testTmpt))
@@ -4584,7 +4843,7 @@ namespace UIOperateInterleaverFinalTest
                     return;
                 }
 
-                // 单项：同产品同温度全部端口置为未测，扫完后串行续测另一路
+                // 单项：同产品同温度全部端口置为未测，再一次扫完 Even+Odd（或同 ScanIndex 组）
                 int productId = selectItem.ProductIndex + 1;
                 foreach (PortAssist assist in portAssistant)
                 {
@@ -4593,10 +4852,28 @@ namespace UIOperateInterleaverFinalTest
                 }
                 singleScanSameTmptActive = true;
 
+                DemuxScanPortPlan portPlan = PlanScanPorts(productId, testTmpt, switchAssist.ScanIndex);
+                if (portPlan.PortIndexes.Count == 0)
+                {
+                    WarningBox("未找到可扫描端口。");
+                    singleScanSameTmptActive = false;
+                    return;
+                }
+                scanDetailInfo.Ports.Clear();
+                scanDetailInfo.Ports.AddRange(portPlan.PortIndexes);
+
+                string errMsg = "";
+                if (!IsScanRef(scanDetailInfo.Ports, ref errMsg))
+                {
+                    WarningBox(errMsg);
+                    singleScanSameTmptActive = false;
+                    return;
+                }
+
                 scanDetailInfo.ScanType = SCANTYPE.TestWithPDL;
                 scanDetailInfo.ProductIndex = productId;
                 UIControl.IsScanEnable = false;
-                if (!TrySetSwitchBeforeScan(scanDetailInfo.ProductIndex, testPortName))
+                if (!TrySetSwitchesBeforeScan(scanDetailInfo.ProductIndex, portPlan.PortKeysInSwitchOrder))
                 {
                     singleScanSameTmptActive = false;
                     UIControl.IsScanEnable = true;

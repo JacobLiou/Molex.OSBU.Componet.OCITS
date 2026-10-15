@@ -71,6 +71,7 @@
     <Reference Include="WindowsBase" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="DemuxScanPortPlanner.cs" />
     <Compile Include="InterleaverFinalTestCurve.cs" />
     <Compile Include="InterleaverScanResult.cs" />
     <Compile Include="OperateInteleaverFinalTest.xaml.cs">
