@@ -29,24 +29,6 @@ namespace MolexUtility
         }
 
         /// <summary>
-        /// 若存在空标记文件 set\DisableTccChamberCheck.txt，则测试前不校验 UDL 循环箱温度（无 TCC 现场调试）。
-        /// </summary>
-        public static bool IsTccChamberCheckDisabled()
-        {
-            string flag = Path.Combine(Environment.CurrentDirectory, "set", "DisableTccChamberCheck.txt");
-            return File.Exists(flag);
-        }
-
-        /// <summary>
-        /// 若存在空标记文件 set\RtOnlyTest.txt，则一键/单项测试仅调度常温项（约 20~30°C），跳过 LT/HT。
-        /// </summary>
-        public static bool IsRtOnlyTestMode()
-        {
-            string flag = Path.Combine(Environment.CurrentDirectory, "set", "RtOnlyTest.txt");
-            return File.Exists(flag);
-        }
-
-        /// <summary>
         /// 光谱调节共享落盘根目录：读取 set\SpectrumShareRoot.txt 第一行非空路径（# 行为注释）；
         /// 同机推荐 D:\ITL_SpectrumShare；缺省为 {CurrentDirectory}\SpectrumShare。
         /// </summary>

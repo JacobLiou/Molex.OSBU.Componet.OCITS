@@ -88,41 +88,6 @@ namespace UIOperateInterleaverFinalTest
 
         private const int TCC_GUID = 1;
 
-        /// <summary>循环箱实测温度与模板要求温度的允许偏差（°C）</summary>
-        private const double TccTempToleranceCelsius = 2.0;
-
-        /// <summary>循环箱读温最大尝试次数（含首次）</summary>
-        private const int TccReadMaxAttempts = 3;
-
-        /// <summary>循环箱读温失败后重试间隔（毫秒）</summary>
-        private const int TccReadRetryDelayMs = 500;
-
-        /// <summary>设温最大尝试次数</summary>
-        private const int TccSetpointMaxAttempts = 5;
-
-        /// <summary>设温重试间隔（毫秒）</summary>
-        private const int TccSetpointRetryDelayMs = 1000;
-
-        /// <summary>设温 UDL 失败后趋势观察窗总时长（毫秒）</summary>
-        private const int TccSetpointTrendObserveMs = 20000;
-
-        /// <summary>趋势观察采样间隔（毫秒）</summary>
-        private const int TccSetpointTrendPollMs = 2000;
-
-        /// <summary>认定朝目标变化的最小温差（°C）</summary>
-        private const double TccSetpointTrendMinDeltaCelsius = 0.3;
-
-        /// <summary>操作员对某目标温度选择「通过」的记忆（键=°C×10）</summary>
-        private readonly HashSet<int> tccOperatorPassTempKeys = new HashSet<int>();
-
-        private enum TccOperatorDecision
-        {
-            Abort = 0,
-            Retry = 1,
-            OperatorPass = 2,
-            Success = 3
-        }
-
         /// <summary>TAS 打开模板 STA 线程最长等待（毫秒）</summary>
         private const int OpenTemplateStaTimeoutMs = 180000;
 
@@ -596,16 +561,6 @@ namespace UIOperateInterleaverFinalTest
             if (!anyStarted)
                 return false;
 
-            if (TasRuntimeConfig.IsRtOnlyTestMode())
-            {
-                for (int i = 0; i < portAssistant.Count; i++)
-                {
-                    if (IsRoomTemperature(portAssistant[i].TestTmpt) && !portAssistant[i].IsTested)
-                        return true;
-                }
-                return false;
-            }
-
             bool hasHt = false;
             for (int i = 0; i < portAssistant.Count; i++)
             {
@@ -946,7 +901,6 @@ namespace UIOperateInterleaverFinalTest
             }
             portRawdatas.Clear();
             SetOpenTemplateComplete(false);
-            ClearTccOperatorPassMemory();
             templateOpenInProgress = true;
             RealtimeMsg("正在打开模板...");
             curTestTmpt = -300;
@@ -2922,24 +2876,6 @@ namespace UIOperateInterleaverFinalTest
         /// <param name="scanType">扫描类型</param>
         private void DoScanOnBK()
         {
-            if (curTestTmpt > -299 && !TasRuntimeConfig.IsTccChamberCheckDisabled())
-            {
-                string chamberMsg;
-                TccOperatorDecision decision = TryValidateChamberTemperatureWithConfirm(curTestTmpt, out chamberMsg);
-                if (decision == TccOperatorDecision.Abort)
-                {
-                    RealtimeMsg(string.IsNullOrEmpty(chamberMsg)
-                        ? "操作员终止：开扫前循环箱温度校验失败。"
-                        : chamberMsg, StatusType.Error);
-                    UIControl.IsScanEnable = true;
-                    UIControl.IsSaveEnable = true;
-                    return;
-                }
-                if (decision == TccOperatorDecision.OperatorPass)
-                    RealtimeMsg(string.Format("开扫前温度校验未通过，操作员选择通过（目标 {0:F1}°C）。", curTestTmpt), StatusType.Warning);
-                else
-                    RealtimeMsg(string.Format("开扫前循环箱温度校验通过，模板要求 {0:F1}°C", curTestTmpt));
-            }
             if (GetIsScanFinished())
             {
                 SetIsScanFinished(false);
@@ -3567,16 +3503,6 @@ namespace UIOperateInterleaverFinalTest
             return refSessionWriteTime;
         }
 
-        /// <summary>
-        /// RtOnlyTest 模式下仅允许常温；否则不限制。
-        /// </summary>
-        private static bool IsTestTemperatureAllowed(double tmpt)
-        {
-            if (!TasRuntimeConfig.IsRtOnlyTestMode())
-                return true;
-            return IsRoomTemperature(tmpt);
-        }
-
         private static bool IsMaxMinIlParam(string exParamName)
         {
             if (string.IsNullOrEmpty(exParamName))
@@ -3656,460 +3582,9 @@ namespace UIOperateInterleaverFinalTest
             return true;
         }
 
-        private static int ToTccTempKey(double tmptCelsius)
+        private void EndOnekeyOnChamberFail(bool isOnekey)
         {
-            return (int)Math.Round(tmptCelsius * 10.0);
-        }
-
-        private void ClearTccOperatorPassMemory()
-        {
-            tccOperatorPassTempKeys.Clear();
-        }
-
-        private void RememberTccOperatorPass(double targetTmpt)
-        {
-            tccOperatorPassTempKeys.Add(ToTccTempKey(targetTmpt));
-        }
-
-        private bool IsTccOperatorPassRemembered(double targetTmpt)
-        {
-            return tccOperatorPassTempKeys.Contains(ToTccTempKey(targetTmpt));
-        }
-
-        /// <summary>
-        /// 是=通过继续，否=重试，取消=终止。
-        /// </summary>
-        private static MessageBoxResult ShowTccOperatorConfirmDialog(string title, string detail)
-        {
-            string text = (detail ?? "") + "\r\n\r\n是 = 通过继续\r\n否 = 重试\r\n取消 = 终止";
-            return MessageBox.Show(text, title, MessageBoxButton.YesNoCancel, MessageBoxImage.Warning);
-        }
-
-        /// <summary>
-        /// LT/HT 扫前门禁：不允许「通过继续测」。是=重试，否=终止。
-        /// </summary>
-        private static MessageBoxResult ShowTccGateRetryOrAbortDialog(string title, string detail)
-        {
-            string text = (detail ?? "") + "\r\n\r\n是 = 重试\r\n否 = 终止（不可未控温继续测试）";
-            return MessageBox.Show(text, title, MessageBoxButton.YesNo, MessageBoxImage.Warning);
-        }
-
-        /// <summary>
-        /// 读温失败点「通过」时：仅常温允许跳过烤温；LT/HT 必须仍走设温+烤温。
-        /// </summary>
-        private static bool CanSkipBakeAfterOperatorPass(double targetTmpt)
-        {
-            return IsRoomTemperature(targetTmpt);
-        }
-
-        private static bool IsChamberMovingTowardTarget(double targetTmpt, double actualTmpt, double fromTmpt)
-        {
-            double minDelta = TccSetpointTrendMinDeltaCelsius;
-            double distBefore = Math.Abs(fromTmpt - targetTmpt);
-            double distAfter = Math.Abs(actualTmpt - targetTmpt);
-            if (distAfter + minDelta <= distBefore)
-                return true;
-            if (targetTmpt > fromTmpt && actualTmpt >= fromTmpt + minDelta)
-                return true;
-            if (targetTmpt < fromTmpt && actualTmpt <= fromTmpt - minDelta)
-                return true;
-            return false;
-        }
-
-        /// <summary>
-        /// 设温基准温度：禁止等于 target（否则趋势判定失效）。优先实测，其次有效 curTestTmpt，否则常温 25。
-        /// </summary>
-        private double ResolveSetpointFromTmpt(double targetTmpt, bool hasActualReading, double actualTmpt)
-        {
-            if (hasActualReading)
-                return actualTmpt;
-            if (curTestTmpt > -299 && Math.Abs(curTestTmpt - targetTmpt) > 0.001)
-                return curTestTmpt;
-            if (curTestTmpt > -299)
-                return curTestTmpt;
-            const double roomDefault = 25;
-            if (Math.Abs(roomDefault - targetTmpt) > 0.001)
-                return roomDefault;
-            // 目标即常温且无历史温：略偏开，仅用于趋势方向参考
-            return roomDefault + 1;
-        }
-
-        /// <summary>
-        /// 设温 UDL 失败后短时多点读温：接近目标或朝目标变化则视为设温已生效。
-        /// </summary>
-        private bool TryObserveChamberTrendAfterSetFail(
-            IUDLTCC tcc, double targetTmpt, double fromTmpt, string setErr, out double lastActual)
-        {
-            lastActual = fromTmpt;
-            if (tcc == null)
-                return false;
-
-            int deadlineTick = Environment.TickCount + TccSetpointTrendObserveMs;
-            double? prevSample = null;
-            double adjacentToward = 0;
-            int sampleIndex = 0;
-            int readOkCount = 0;
-
-            while (true)
-            {
-                sampleIndex++;
-                double actual = 0;
-                string readErr = "";
-                // 单次读温：失败则跳过该点，不把观察窗耗在内层重试上
-                int readRes = tcc.GetCurrentTemp(out actual, ref readErr);
-                if (readRes == 0)
-                {
-                    readOkCount++;
-                    lastActual = actual;
-
-                    if (Math.Abs(actual - targetTmpt) <= TccTempToleranceCelsius)
-                    {
-                        CommonFunction.WriteLog(string.Format(
-                            "TCC SetTempSetpoint fail but heating toward target: from={0:F1}, actual={1:F1}, target={2:F1}, samples={3}, readOk={4}, reason=nearTarget, err={5}",
-                            fromTmpt, actual, targetTmpt, sampleIndex, readOkCount, setErr));
-                        return true;
-                    }
-
-                    if (IsChamberMovingTowardTarget(targetTmpt, actual, fromTmpt))
-                    {
-                        CommonFunction.WriteLog(string.Format(
-                            "TCC SetTempSetpoint fail but heating toward target: from={0:F1}, actual={1:F1}, target={2:F1}, samples={3}, readOk={4}, reason=fromBaseline, err={5}",
-                            fromTmpt, actual, targetTmpt, sampleIndex, readOkCount, setErr));
-                        return true;
-                    }
-
-                    if (prevSample.HasValue)
-                    {
-                        double prev = prevSample.Value;
-                        if (targetTmpt > fromTmpt && actual > prev)
-                            adjacentToward += (actual - prev);
-                        else if (targetTmpt < fromTmpt && actual < prev)
-                            adjacentToward += (prev - actual);
-
-                        if (adjacentToward >= TccSetpointTrendMinDeltaCelsius)
-                        {
-                            CommonFunction.WriteLog(string.Format(
-                                "TCC SetTempSetpoint fail but heating toward target: from={0:F1}, actual={1:F1}, target={2:F1}, samples={3}, readOk={4}, reason=adjacentDelta={5:F2}, err={6}",
-                                fromTmpt, actual, targetTmpt, sampleIndex, readOkCount, adjacentToward, setErr));
-                            return true;
-                        }
-                    }
-                    prevSample = actual;
-                }
-                else
-                {
-                    CommonFunction.WriteLog(string.Format(
-                        "TCC setpoint trend observe read fail ({0}): {1}", sampleIndex, readErr));
-                }
-
-                int remaining = deadlineTick - Environment.TickCount;
-                if (remaining <= 0)
-                    break;
-                Thread.Sleep(Math.Min(TccSetpointTrendPollMs, Math.Max(remaining, 1)));
-                if (Environment.TickCount - deadlineTick >= 0)
-                    break;
-            }
-
-            CommonFunction.WriteLog(string.Format(
-                "TCC setpoint trend observe exhausted: from={0:F1}, last={1:F1}, target={2:F1}, samples={3}, readOk={4}, setErr={5}",
-                fromTmpt, lastActual, targetTmpt, sampleIndex, readOkCount, setErr));
-            return false;
-        }
-
-        /// <summary>
-        /// 读取循环箱温度；通讯失败时静默重试。最终仍失败返回 1（不假定模板温度）。
-        /// </summary>
-        private int TryReadChamberTemperature(IUDLTCC tcc, out double actual, ref string errMsg)
-        {
-            actual = 0;
-            if (tcc == null)
-            {
-                errMsg = "循环箱未配置或未连接。";
-                return 1;
-            }
-            string lastErrMsg = "";
-            for (int attempt = 1; attempt <= TccReadMaxAttempts; attempt++)
-            {
-                errMsg = "";
-                int res = tcc.GetCurrentTemp(out actual, ref errMsg);
-                if (res == 0)
-                {
-                    errMsg = "";
-                    return 0;
-                }
-                lastErrMsg = errMsg ?? "";
-                CommonFunction.WriteLog(string.Format(
-                    "TCC GetCurrentTemp fail ({0}/{1}): {2}",
-                    attempt, TccReadMaxAttempts, lastErrMsg));
-                if (attempt < TccReadMaxAttempts)
-                    Thread.Sleep(TccReadRetryDelayMs);
-            }
-            errMsg = string.IsNullOrEmpty(lastErrMsg) ? "循环箱读温失败。" : lastErrMsg;
-            return 1;
-        }
-
-        /// <summary>
-        /// 读温成功则返回实测（含与目标差 &gt; ±2°C）。温差不在此处弹框，由调用方设温并烤温。
-        /// 读温失败时三按钮（通过/重试/取消）。LT/HT：点「通过」不跳过烤温；常温才允许 skipBake。通过记忆不放行扫前门禁。
-        /// </summary>
-        private TccOperatorDecision TryReadChamberTemperatureWithOperatorConfirm(
-            IUDLTCC tcc, double targetTmpt, out double actual, out bool hasActualReading, out bool skipBakeByOperator, ref string errMsg)
-        {
-            actual = 0;
-            hasActualReading = false;
-            skipBakeByOperator = false;
-            int operatorRetryRound = 0;
-            while (true)
-            {
-                if (IsTccOperatorPassRemembered(targetTmpt))
-                {
-                    hasActualReading = false;
-                    // 仅常温可跳过烤温；LT/HT 记忆只跳过读温弹窗，仍须设温+烤温
-                    skipBakeByOperator = CanSkipBakeAfterOperatorPass(targetTmpt);
-                    errMsg = "";
-                    RealtimeMsg(string.Format(
-                        "循环箱读温：目标 {0:F1}°C 已有操作员通过记忆（{1}）。",
-                        targetTmpt, skipBakeByOperator ? "常温跳过烤温" : "LT/HT 仍须烤温"), StatusType.Warning);
-                    return TccOperatorDecision.OperatorPass;
-                }
-
-                errMsg = "";
-                int res = TryReadChamberTemperature(tcc, out actual, ref errMsg);
-                if (res == 0)
-                {
-                    hasActualReading = true;
-                    if (Math.Abs(actual - targetTmpt) <= TccTempToleranceCelsius)
-                    {
-                        errMsg = "";
-                        return TccOperatorDecision.Success;
-                    }
-
-                    errMsg = "";
-                    RealtimeMsg(string.Format(
-                        "循环箱当前 {0:F1}°C，目标 {1:F1}°C，温差超过 ±{2:F1}°C，将设温并烤温。",
-                        actual, targetTmpt, TccTempToleranceCelsius), StatusType.Warning);
-                    return TccOperatorDecision.Success;
-                }
-
-                string failDetail = string.Format(
-                    "循环箱读温失败（目标 {0:F1}°C）。\r\n{1}",
-                    targetTmpt, errMsg);
-                RealtimeMsg(failDetail, StatusType.Error);
-                MessageBoxResult box = ShowTccOperatorConfirmDialog("循环箱读温", failDetail);
-                if (box == MessageBoxResult.Yes)
-                {
-                    RememberTccOperatorPass(targetTmpt);
-                    hasActualReading = false;
-                    skipBakeByOperator = CanSkipBakeAfterOperatorPass(targetTmpt);
-                    errMsg = "";
-                    if (!skipBakeByOperator)
-                    {
-                        RealtimeMsg(string.Format(
-                            "读温已通过，但目标 {0:F1}°C 非常温，仍将设温并烤温。", targetTmpt), StatusType.Warning);
-                    }
-                    return TccOperatorDecision.OperatorPass;
-                }
-                if (box == MessageBoxResult.Cancel)
-                    return TccOperatorDecision.Abort;
-
-                operatorRetryRound++;
-                Thread.Sleep(Math.Min(TccReadRetryDelayMs * (1 + operatorRetryRound), 3000));
-            }
-        }
-
-        private bool TryValidateChamberTemperature(double requiredTmpt, out string message, out double actual)
-        {
-            message = "";
-            actual = 0;
-            string errMsg = "";
-            IUDLTCC tccCtrl = null;
-            DeviceControl.GetUDLTCCByGUID(TCC_GUID, ref tccCtrl, ref errMsg);
-            if (tccCtrl == null)
-            {
-                message = string.IsNullOrEmpty(errMsg)
-                    ? "循环箱未配置或未连接，无法校验温度。"
-                    : "循环箱未配置或未连接：" + errMsg;
-                return false;
-            }
-            if (TryReadChamberTemperature(tccCtrl, out actual, ref errMsg) != 0)
-            {
-                message = string.IsNullOrEmpty(errMsg)
-                    ? "循环箱读温失败，无法校验温度。"
-                    : "循环箱读温失败：" + errMsg;
-                return false;
-            }
-            if (Math.Abs(actual - requiredTmpt) > TccTempToleranceCelsius)
-            {
-                message = string.Format(
-                    "循环箱温度不符合模板要求，不能测试。\r\n模板要求:{0:F1}°C\r\n当前实测:{1:F1}°C\r\n允许偏差:±{2:F1}°C",
-                    requiredTmpt, actual, TccTempToleranceCelsius);
-                return false;
-            }
-            return true;
-        }
-
-        /// <summary>
-        /// 扫前 ±2°C 门禁。常温：可通过/重试/终止；LT/HT：仅重试/终止（禁止未控温继续测）。
-        /// 读温「通过记忆」不再放行本门禁。
-        /// </summary>
-        private TccOperatorDecision TryValidateChamberTemperatureWithConfirm(double requiredTmpt, out string message)
-        {
-            message = "";
-            while (true)
-            {
-                double actual;
-                if (TryValidateChamberTemperature(requiredTmpt, out message, out actual))
-                {
-                    message = "";
-                    return TccOperatorDecision.Success;
-                }
-
-                if (IsRoomTemperature(requiredTmpt))
-                {
-                    MessageBoxResult box = ShowTccOperatorConfirmDialog("循环箱温度校验", message);
-                    if (box == MessageBoxResult.Yes)
-                    {
-                        RememberTccOperatorPass(requiredTmpt);
-                        return TccOperatorDecision.OperatorPass;
-                    }
-                    if (box == MessageBoxResult.Cancel)
-                        return TccOperatorDecision.Abort;
-                    continue;
-                }
-
-                // LT/HT：不允许「通过继续测」
-                MessageBoxResult gate = ShowTccGateRetryOrAbortDialog("循环箱温度校验", message);
-                if (gate == MessageBoxResult.Yes)
-                    continue;
-                return TccOperatorDecision.Abort;
-            }
-        }
-
-        private bool TryGetTccController(out IUDLTCC tcc, out string errMsg)
-        {
-            tcc = null;
-            errMsg = "";
-            if (DeviceControl == null)
-            {
-                errMsg = "设备控制未初始化。";
-                return false;
-            }
-            DeviceControl.GetUDLTCCByGUID(TCC_GUID, ref tcc, ref errMsg);
-            return tcc != null;
-        }
-
-        private bool IsBakeRequired(double targetTmpt, double actualTmpt, bool hasActualReading)
-        {
-            if (TasRuntimeConfig.IsTccChamberCheckDisabled())
-                return false;
-
-            if (hasActualReading)
-                return Math.Abs(actualTmpt - targetTmpt) > TccTempToleranceCelsius;
-
-            if (curTestTmpt < -299)
-            {
-                if (IsRoomTemperature(targetTmpt))
-                    return false;
-                return true;
-            }
-            return Math.Abs(curTestTmpt - targetTmpt) > 0.001;
-        }
-
-        private static bool TrySetChamberSetpointOnce(IUDLTCC tcc, double targetTmpt, ref string errMsg)
-        {
-            if (tcc == null)
-            {
-                errMsg = "循环箱未配置或未连接。";
-                return false;
-            }
-            errMsg = "";
-            return tcc.SetTempSetpoint(targetTmpt, ref errMsg) == 0;
-        }
-
-        /// <summary>
-        /// 设温：重试；失败后短时多点观察朝目标趋势则视为成功；
-        /// 仍失败则静默继续烤温（不弹框、不停三温），保障产能。
-        /// </summary>
-        private TccOperatorDecision TrySetChamberSetpointWithOperatorConfirm(
-            IUDLTCC tcc, double targetTmpt, double fromTmpt, ref string errMsg)
-        {
-            // 常温读温「通过记忆」可跳过设温；LT/HT 记忆不跳过设温（避免未控温开测）
-            if (IsTccOperatorPassRemembered(targetTmpt) && CanSkipBakeAfterOperatorPass(targetTmpt))
-            {
-                errMsg = "";
-                RealtimeMsg(string.Format("设温：目标 {0:F1}°C 已有操作员通过记忆（常温）。", targetTmpt), StatusType.Warning);
-                return TccOperatorDecision.OperatorPass;
-            }
-
-            for (int attempt = 1; attempt <= TccSetpointMaxAttempts; attempt++)
-            {
-                errMsg = "";
-                if (TrySetChamberSetpointOnce(tcc, targetTmpt, ref errMsg))
-                {
-                    errMsg = "";
-                    return TccOperatorDecision.Success;
-                }
-
-                // Set 失败：观察窗内多点读温，朝目标变化则成功（不苛求 Get 设定值）
-                double actual = 0;
-                if (TryObserveChamberTrendAfterSetFail(tcc, targetTmpt, fromTmpt, errMsg, out actual))
-                {
-                    RealtimeMsg(string.Format(
-                        "设温回报失败，但实测 {0:F1}°C 已朝 {1:F1}°C 变化，继续烤温。",
-                        actual, targetTmpt), StatusType.Warning);
-                    errMsg = "";
-                    return TccOperatorDecision.Success;
-                }
-
-                CommonFunction.WriteLog(string.Format(
-                    "TCC SetTempSetpoint fail ({0}/{1}): {2}", attempt, TccSetpointMaxAttempts, errMsg));
-                if (attempt < TccSetpointMaxAttempts)
-                    Thread.Sleep(TccSetpointRetryDelayMs);
-            }
-
-            // 静默稳产能：仍进入烤温；开扫前 LT/HT 门禁禁止「通过继续」
-            string detail = string.Format(
-                "循环箱设置温度失败(已静默继续烤温):{0:F1}°C，{1}",
-                targetTmpt, string.IsNullOrEmpty(errMsg) ? "未知错误" : errMsg);
-            CommonFunction.WriteLog("TCC SetTempSetpoint silent continue: " + detail);
-            RealtimeMsg(detail, StatusType.Warning);
-            errMsg = "";
-            return TccOperatorDecision.Success;
-        }
-
-        /// <summary>
-        /// 三温测完（常为高温）后设回常温，利用回温时间做上传/开下一批模板。
-        /// </summary>
-        private void RequestChamberReturnToRoomTemp()
-        {
-            if (TasRuntimeConfig.IsTccChamberCheckDisabled())
-                return;
-
-            string errMsg = "";
-            IUDLTCC tccCtrl;
-            if (!TryGetTccController(out tccCtrl, out errMsg) || tccCtrl == null)
-            {
-                RealtimeMsg("循环箱回常温跳过：未配置或未连接。", StatusType.Warning);
-                return;
-            }
-
-            const double roomSetpoint = 25;
-            double fromTmpt = ResolveSetpointFromTmpt(roomSetpoint, false, 0);
-            double actual;
-            string readErr = "";
-            if (TryReadChamberTemperature(tccCtrl, out actual, ref readErr) == 0)
-                fromTmpt = ResolveSetpointFromTmpt(roomSetpoint, true, actual);
-
-            TccOperatorDecision decision = TrySetChamberSetpointWithOperatorConfirm(tccCtrl, roomSetpoint, fromTmpt, ref errMsg);
-            if (decision == TccOperatorDecision.Abort)
-                RealtimeMsg(string.Format("循环箱回常温失败/终止:{0}", errMsg), StatusType.Error);
-            else
-                RealtimeMsg(string.Format("测试结束，循环箱已设定回常温 {0:F0}°C，可利用回温时间准备下一批。", roomSetpoint));
-        }
-
-        private void RestoreUiOnChamberFail(bool restoreOnekeyUiOnFail)
-        {
-            if (!restoreOnekeyUiOnFail)
+            if (!isOnekey)
                 return;
             RealtimeMsg("一键测试结束");
             UIControl.IsReferenceEnable = true;
@@ -4117,148 +3592,85 @@ namespace UIOperateInterleaverFinalTest
             UIControl.IsSaveEnable = true;
         }
 
-        private void StartBakeCountdown(double targetTmpt, double soakMinutes)
+        /// <summary>
+        /// 判断是否需要烤温：需要则设温并启动烤温倒计时（倒计时结束后扫描），否则直接扫描。
+        /// </summary>
+        private bool PrepareChamberAndScan(double scanTmpt, double tmptChangeTimes, bool isOnekey)
         {
-            if (bakeTimeCheckBK.IsBusy)
-                bakeTimeCheckBK.CancelAsync();
-
-            curBakeStatus = BakeStatus.Baking;
-            UIControl.IsClearSNVisiable = Visibility.Visible;
-            TemptRemainTime.Text = "00:00:00";
-            curTestTmpt = targetTmpt;
-
-            if (bakeTimeCheckBK.IsBusy)
-            {
-                var retry = new BackgroundWorker();
-                retry.DoWork += (s, args) =>
-                {
-                    for (int i = 0; i < 50 && bakeTimeCheckBK.IsBusy; i++)
-                        Thread.Sleep(100);
-                };
-                retry.RunWorkerCompleted += (s, args) =>
-                {
-                    if (!bakeTimeCheckBK.IsBusy)
-                        bakeTimeCheckBK.RunWorkerAsync(soakMinutes * 60);
-                    else
-                    {
-                        RealtimeMsg("烤温计时启动失败：上一烤温线程未结束。", StatusType.Error);
-                        UIControl.IsScanEnable = true;
-                    }
-                };
-                retry.RunWorkerAsync();
-            }
-            else
-            {
-                bakeTimeCheckBK.RunWorkerAsync(soakMinutes * 60);
-            }
-        }
-
-        private bool BeginChamberPrepOrScan(double targetTmpt, double soakMinutes, bool restoreOnekeyUiOnFail)
-        {
-            if (TasRuntimeConfig.IsTccChamberCheckDisabled())
-            {
-                RealtimeMsg("已跳过循环箱温度校验（set\\DisableTccChamberCheck.txt）");
-                curTestTmpt = targetTmpt;
-                DoScanOnBK();
-                return true;
-            }
-
             string errMsg = "";
-            IUDLTCC tccCtrl = null;
-            bool hasTcc = TryGetTccController(out tccCtrl, out errMsg);
-            bool hasActualReading = false;
-            bool skipBakeByOperator = false;
-            double actualTmpt = 0;
-            double fromTmpt = ResolveSetpointFromTmpt(targetTmpt, false, 0);
+            //判断是否需要烤温
+            bool isNeedHeat = false;
 
-            if (hasTcc)
+            IUDLTCC tccCtrl = null;
+            DeviceControl.GetUDLTCCByGUID(TCC_GUID, ref tccCtrl, ref errMsg);
+            if (tccCtrl == null)
             {
-                TccOperatorDecision readDecision = TryReadChamberTemperatureWithOperatorConfirm(
-                    tccCtrl, targetTmpt, out actualTmpt, out hasActualReading, out skipBakeByOperator, ref errMsg);
-                if (readDecision == TccOperatorDecision.Abort)
+                RealtimeMsg(string.Format("循环箱未连接"));
+                if (curTestTmpt.CompareTo(-300) == 0)
                 {
-                    RealtimeMsg("操作员终止：循环箱读温。", StatusType.Error);
-                    RestoreUiOnChamberFail(restoreOnekeyUiOnFail);
-                    UIControl.IsScanEnable = true;
-                    return false;
+                    if (scanTmpt > 20 && curTestTmpt < 30)
+                    {
+                        isNeedHeat = false;
+                    }
+                    else
+                        isNeedHeat = true;
                 }
-                fromTmpt = ResolveSetpointFromTmpt(targetTmpt, hasActualReading, actualTmpt);
-                if (hasActualReading)
+                else if (curTestTmpt.CompareTo(scanTmpt) != 0)
                 {
-                    RealtimeMsg(string.Format("读取循环箱温度:{0:F1}°C", actualTmpt));
-                }
-                else if (readDecision == TccOperatorDecision.OperatorPass)
-                {
-                    RealtimeMsg(string.Format(
-                        "循环箱读温未取得实测，操作员通过或记忆（目标 {0:F1}°C）。", targetTmpt), StatusType.Warning);
+                    isNeedHeat = true;
                 }
             }
-
-            if (skipBakeByOperator || !IsBakeRequired(targetTmpt, actualTmpt, hasActualReading))
+            else
             {
-                curTestTmpt = targetTmpt;
-                if (!EnsureChamberReadyForTest(targetTmpt, restoreOnekeyUiOnFail))
-                    return false;
+                double dTccTemp;
+                int nTccRes = tccCtrl.GetCurrentTemp(out dTccTemp, ref errMsg);
+                if (nTccRes != 0)
+                {
+                    Thread.Sleep(100);
+                    nTccRes = tccCtrl.GetCurrentTemp(out dTccTemp, ref errMsg);
+                    if (nTccRes != 0)
+                    {
+                        RealtimeMsg(string.Format("读取循环箱温度失败:{0}", errMsg));
+                        EndOnekeyOnChamberFail(isOnekey);
+                        return false;
+                    }
+                }
+                RealtimeMsg(string.Format("读取循环箱温度:{0}", dTccTemp));
+                if (Math.Abs(dTccTemp - scanTmpt) > 5)
+                {
+                    isNeedHeat = true;
+                }
+            }
+            RealtimeMsg(string.Format("是否需要烤温:{0}", isNeedHeat));
+
+            if (!isNeedHeat)
+            {
+                curTestTmpt = scanTmpt;
                 DoScanOnBK();
                 return true;
             }
 
-            if (!hasTcc)
+            if (tccCtrl == null)
             {
-                string message = "循环箱未连接，无法进行变温拷温，请先连接循环箱！";
-                RealtimeMsg(message, StatusType.Error);
-                ErrorBox(message);
-                RestoreUiOnChamberFail(restoreOnekeyUiOnFail);
+                RealtimeMsg(string.Format("循环箱未连接，请先连接循环箱！"));
+                EndOnekeyOnChamberFail(isOnekey);
                 return false;
             }
 
-            if (hasActualReading)
+            RealtimeMsg(string.Format("开始进行{0}度烤温", scanTmpt));
+            int nSetRes = tccCtrl.SetTempSetpoint(scanTmpt, ref errMsg);
+            if (nSetRes != 0)
             {
-                RealtimeMsg(string.Format(
-                    "开始进行 {0:F1}°C 拷温，当前实测 {1:F1}°C，烤温 {2:F0} 分钟",
-                    targetTmpt, actualTmpt, soakMinutes));
+                nSetRes = tccCtrl.SetTempSetpoint(scanTmpt, ref errMsg);
+                if (nSetRes != 0)
+                {
+                    RealtimeMsg(string.Format("循环箱设置温度失败:{0},{1}", scanTmpt, errMsg));
+                    EndOnekeyOnChamberFail(isOnekey);
+                    return false;
+                }
             }
-            else
-            {
-                RealtimeMsg(string.Format(
-                    "开始进行 {0:F1}°C 拷温，烤温 {1:F0} 分钟",
-                    targetTmpt, soakMinutes));
-            }
-            TccOperatorDecision setDecision = TrySetChamberSetpointWithOperatorConfirm(
-                tccCtrl, targetTmpt, fromTmpt, ref errMsg);
-            if (setDecision == TccOperatorDecision.Abort)
-            {
-                string message = string.Format("循环箱设置温度失败:{0:F1}°C，{1}", targetTmpt, errMsg);
-                RealtimeMsg(message, StatusType.Error);
-                RestoreUiOnChamberFail(restoreOnekeyUiOnFail);
-                UIControl.IsScanEnable = true;
-                return false;
-            }
-
-            StartBakeCountdown(targetTmpt, soakMinutes);
-            return true;
-        }
-
-        private bool EnsureChamberReadyForTest(double requiredTmpt, bool restoreOnekeyUiOnFail = false)
-        {
-            if (TasRuntimeConfig.IsTccChamberCheckDisabled())
-            {
-                RealtimeMsg("已跳过循环箱温度校验（set\\DisableTccChamberCheck.txt）");
-                return true;
-            }
-
-            string message;
-            TccOperatorDecision decision = TryValidateChamberTemperatureWithConfirm(requiredTmpt, out message);
-            if (decision == TccOperatorDecision.Abort)
-            {
-                RealtimeMsg(string.IsNullOrEmpty(message) ? "操作员终止循环箱温度校验。" : message, StatusType.Error);
-                RestoreUiOnChamberFail(restoreOnekeyUiOnFail);
-                return false;
-            }
-            if (decision == TccOperatorDecision.OperatorPass)
-                RealtimeMsg(string.Format("循环箱温度校验未通过，操作员选择通过（目标 {0:F1}°C）。", requiredTmpt), StatusType.Warning);
-            else
-                RealtimeMsg(string.Format("循环箱温度校验通过，模板要求 {0:F1}°C", requiredTmpt));
+            bakeTimeCheckBK.RunWorkerAsync(tmptChangeTimes * 60);
+            curTestTmpt = scanTmpt;
             return true;
         }
 
@@ -4505,7 +3917,6 @@ namespace UIOperateInterleaverFinalTest
                 if (bakeTimeCheckBK.IsBusy)
                     bakeTimeCheckBK.CancelAsync();
                 curBakeStatus = BakeStatus.UnBake;
-                ClearTccOperatorPassMemory();
                 AllProducts.Clear();
                 allProductControl.Clear();
                 testShowControl.Clear();
@@ -4537,7 +3948,6 @@ namespace UIOperateInterleaverFinalTest
                 return;
             }
             batchTestAborted = false;
-            ClearTccOperatorPassMemory();
             /*foreach(PortAssist assist in portAssistant)
             {                
                 assist.IsTested = false;
@@ -4563,25 +3973,6 @@ namespace UIOperateInterleaverFinalTest
             if (curTestTmpt == -300)
             {
                 scanTmpt = portAssistant[0].TestTmpt;
-                if (TasRuntimeConfig.IsRtOnlyTestMode())
-                {
-                    scanTmpt = -300;
-                    for (int j = 0; j < portAssistant.Count; j++)
-                    {
-                        if (IsRoomTemperature(portAssistant[j].TestTmpt))
-                        {
-                            scanTmpt = portAssistant[j].TestTmpt;
-                            break;
-                        }
-                    }
-                    if (scanTmpt < -299)
-                    {
-                        WarningBox("RtOnlyTest：模板中未找到常温测试项。");
-                        UIControl.IsScanEnable = true;
-                        UIControl.IsSaveEnable = true;
-                        return;
-                    }
-                }
             }
             else
             {
@@ -4590,8 +3981,6 @@ namespace UIOperateInterleaverFinalTest
             //查找当前一键测试该测试哪项
             for (i = 0; i < portAssistant.Count; i++)
             {
-                if (!IsTestTemperatureAllowed(portAssistant[i].TestTmpt))
-                    continue;
                 if ((!portAssistant[i].IsTested) && scanTmpt==portAssistant[i].TestTmpt)
                 {
                     break;
@@ -4602,8 +3991,6 @@ namespace UIOperateInterleaverFinalTest
             {
                 for (i = 0; i < portAssistant.Count; i++)
                 {
-                    if (!IsTestTemperatureAllowed(portAssistant[i].TestTmpt))
-                        continue;
                     if (!portAssistant[i].IsTested)
                     {
                         scanTmpt = portAssistant[i].TestTmpt;
@@ -4614,24 +4001,7 @@ namespace UIOperateInterleaverFinalTest
 
             if (i == portAssistant.Count)
             {
-                bool rtOnly = TasRuntimeConfig.IsRtOnlyTestMode();
-                bool anyRtPending = false;
-                bool anyNonRtUntested = false;
-                for (int j = 0; j < portAssistant.Count; j++)
-                {
-                    if (portAssistant[j].IsTested)
-                        continue;
-                    if (IsRoomTemperature(portAssistant[j].TestTmpt))
-                        anyRtPending = true;
-                    else
-                        anyNonRtUntested = true;
-                }
-                string completeMsg = "一键测试完成！";
-                if (rtOnly && !anyRtPending && anyNonRtUntested)
-                    completeMsg = "RtOnlyTest：无常温待测项，一键测试结束。（低温/高温项已跳过）";
-                // 先下发回常温，再弹窗，避免等确认才开始回温
-                RequestChamberReturnToRoomTemp();
-                MessageBox.Show(completeMsg);
+                MessageBox.Show("一键测试完成！");
                 UIControl.IsScanEnable = true;
                 UIControl.IsSaveEnable = true;
                 return;
@@ -4690,7 +4060,7 @@ namespace UIOperateInterleaverFinalTest
             UpdateItem(testShowControl[productID-1].GetAllTestInfo()[0], productID-1, 0, nextSeleted);
 
             double soakMinutes = portAssistant[i].TmptChangeTimes;
-            if (!BeginChamberPrepOrScan(scanTmpt, soakMinutes, restoreOnekeyUiOnFail: true))
+            if (!PrepareChamberAndScan(scanTmpt, soakMinutes, true))
                 return;
         }
 
@@ -4753,8 +4123,6 @@ namespace UIOperateInterleaverFinalTest
                     continue;
                 if (portAssistant[i].TestTmpt != scanTmpt)
                     continue;
-                if (!IsTestTemperatureAllowed(portAssistant[i].TestTmpt))
-                    continue;
                 if (!portAssistant[i].IsTested)
                     break;
             }
@@ -4792,7 +4160,7 @@ namespace UIOperateInterleaverFinalTest
             RealtimeMsg(string.Format("单项测试续测同温下一路:{0}", portAssistant[i].Name));
             scanDetailInfo.ScanType = SCANTYPE.TestWithPDL;
             UIControl.IsScanEnable = false;
-            if (!BeginChamberPrepOrScan(scanTmpt, portAssistant[i].TmptChangeTimes, restoreOnekeyUiOnFail: false))
+            if (!PrepareChamberAndScan(scanTmpt, portAssistant[i].TmptChangeTimes, false))
             {
                 singleScanSameTmptActive = false;
                 UIControl.IsScanEnable = true;
@@ -4835,13 +4203,6 @@ namespace UIOperateInterleaverFinalTest
 
                 double testTmpt = selectTestItem.Temperature;
                 RealtimeMsg(string.Format("当前测试温度:{0}", testTmpt));
-                if (!IsTestTemperatureAllowed(testTmpt))
-                {
-                    WarningBox(string.Format(
-                        "RtOnlyTest 模式仅支持常温测试（约 20~30°C）。\r\n当前项温度:{0:F1}°C\r\n请删除 set\\RtOnlyTest.txt 或改选常温行。",
-                        testTmpt));
-                    return;
-                }
 
                 // 单项：同产品同温度全部端口置为未测，再一次扫完 Even+Odd（或同 ScanIndex 组）
                 int productId = selectItem.ProductIndex + 1;
@@ -4879,7 +4240,7 @@ namespace UIOperateInterleaverFinalTest
                     UIControl.IsScanEnable = true;
                     return;
                 }
-                if (!BeginChamberPrepOrScan(testTmpt, switchAssist.TmptChangeTimes, restoreOnekeyUiOnFail: false))
+                if (!PrepareChamberAndScan(testTmpt, switchAssist.TmptChangeTimes, false))
                 {
                     singleScanSameTmptActive = false;
                     UIControl.IsScanEnable = true;
@@ -5172,8 +4533,13 @@ namespace UIOperateInterleaverFinalTest
             ShowTmpltPath();
             savePathList.Clear();
 
-            // 一键结束时通常已回常温；上传后再设一次，保证流程闭环
-            RequestChamberReturnToRoomTemp();
+            string tccErrMsg = "";
+            IUDLTCC tccCtrl = null;
+            DeviceControl.GetUDLTCCByGUID(TCC_GUID, ref tccCtrl, ref tccErrMsg);
+            if (tccCtrl != null)
+            {
+                tccCtrl.SetTempSetpoint(25, ref tccErrMsg);
+            }
         }
 
         private void UserControl_PreviewKeyDown(object sender, KeyEventArgs e)
