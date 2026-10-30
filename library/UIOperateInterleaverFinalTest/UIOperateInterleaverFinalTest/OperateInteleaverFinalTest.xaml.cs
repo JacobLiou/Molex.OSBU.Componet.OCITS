@@ -662,6 +662,8 @@ namespace UIOperateInterleaverFinalTest
             mainInfo = info;
             //testProcess = (MESTestProcess)Enum.Parse(typeof(MESTestProcess), mainInfo.TestProcess, true);
             //templateType = (MESTemplateType)Enum.Parse(typeof(MESTemplateType), mainInfo.TemplateType, true);
+            // 烤温/扫描多在后台线程：捕获 UI 同步上下文，供 UDLTccCtrl 封送 UDL COM
+            UdlUiSync.Capture();
             string errMsg = "";
             if (mainInfo.MESMode.ToUpper().Contains("MESLESS") || mainInfo.MESMode.ToUpper().Contains("OFFLINE"))
             {
@@ -3622,20 +3624,16 @@ namespace UIOperateInterleaverFinalTest
             }
             else
             {
+                // 重试/间隔已集中在 UDLTccCtrl（约 5×1.2s），此处不再 Sleep(100) 叠加重试
                 double dTccTemp;
                 int nTccRes = tccCtrl.GetCurrentTemp(out dTccTemp, ref errMsg);
                 if (nTccRes != 0)
                 {
-                    Thread.Sleep(100);
-                    nTccRes = tccCtrl.GetCurrentTemp(out dTccTemp, ref errMsg);
-                    if (nTccRes != 0)
-                    {
-                        RealtimeMsg(string.Format("读取循环箱温度失败:{0}", errMsg));
-                        EndOnekeyOnChamberFail(isOnekey);
-                        return false;
-                    }
+                    RealtimeMsg(string.Format("读取循环箱温度失败:{0}", errMsg));
+                    EndOnekeyOnChamberFail(isOnekey);
+                    return false;
                 }
-                RealtimeMsg(string.Format("读取循环箱温度:{0}", dTccTemp));
+                RealtimeMsg(string.Format("读取循环箱温度:{0:F3}", dTccTemp));
                 if (Math.Abs(dTccTemp - scanTmpt) > 5)
                 {
                     isNeedHeat = true;
@@ -3657,17 +3655,13 @@ namespace UIOperateInterleaverFinalTest
                 return false;
             }
 
-            RealtimeMsg(string.Format("开始进行{0}度烤温", scanTmpt));
+            RealtimeMsg(string.Format("开始进行{0}度烤温（设温由 UDLTccCtrl 稳定重试）", scanTmpt));
             int nSetRes = tccCtrl.SetTempSetpoint(scanTmpt, ref errMsg);
             if (nSetRes != 0)
             {
-                nSetRes = tccCtrl.SetTempSetpoint(scanTmpt, ref errMsg);
-                if (nSetRes != 0)
-                {
-                    RealtimeMsg(string.Format("循环箱设置温度失败:{0},{1}", scanTmpt, errMsg));
-                    EndOnekeyOnChamberFail(isOnekey);
-                    return false;
-                }
+                RealtimeMsg(string.Format("循环箱设置温度失败:{0},{1}", scanTmpt, errMsg));
+                EndOnekeyOnChamberFail(isOnekey);
+                return false;
             }
             bakeTimeCheckBK.RunWorkerAsync(tmptChangeTimes * 60);
             curTestTmpt = scanTmpt;

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="gb2312"?>
+<!-- 仅测循环箱 TCC：复制为 {exe}\set\Deviceconfig.xml（请用 GB2312/ANSI 保存）。
+     TccTempTest 使用 InitTccOnly：会跳过本文件中非 UDLTCC 设备。
+     UDL：若 OpenEngine 仍卡住，请从完整 UDLConfig.xml 裁剪出仅 TCC 的配置，保存为 set\UDLConfig_TCC.xml。 -->
+<Config>
+  <DeviceConfig name="温控">
+    <Device name="UDLTCC">
+      <Type>UDLTCC</Type>
+      <control0 name="GUID">1</control0>
+    </Device>
+  </DeviceConfig>
+</Config>

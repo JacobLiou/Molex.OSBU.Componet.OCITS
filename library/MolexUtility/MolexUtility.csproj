@@ -112,6 +112,7 @@
     <Compile Include="Device\IUDLFSTP.cs" />
     <Compile Include="Device\IUDLSwitch.cs" />
     <Compile Include="Device\IUDLTCC.cs" />
+    <Compile Include="Device\UdlUiSync.cs" />
     <Compile Include="Device\ScanParam.cs" />
     <Compile Include="FusionControl.cs" />
     <Compile Include="IniParser.cs" />

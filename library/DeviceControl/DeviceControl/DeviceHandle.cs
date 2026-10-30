@@ -119,51 +119,114 @@ namespace DeviceControl
         /// <summary>
         /// 初始化设备
         /// </summary>
-        /// <param name="configPath">配置文件</param>
         /// <param name="errMsg">出错信息</param>
         /// <returns></returns>
         public int InitDeviceByConfig(ref string errMsg)
         {
+            return InitDeviceByConfig(ref errMsg, null);
+        }
+
+        /// <summary>
+        /// 初始化设备（可选进度回调，便于诊断卡在哪一步）
+        /// </summary>
+        public int InitDeviceByConfig(ref string errMsg, Action<string> progress)
+        {
+            Action<string> report = msg =>
+            {
+                try
+                {
+                    if (progress != null)
+                        progress(msg);
+                }
+                catch
+                {
+                }
+                try
+                {
+                    MolexUtility.CommonFunction.WriteLog("[InitDevice] " + msg);
+                }
+                catch
+                {
+                }
+            };
+
             try
             {
+                report("EnsureDeviceLists");
                 EnsureDeviceLists();
                 string udlConfigPath = Environment.CurrentDirectory + "\\set\\UDLConfig.xml";
-                if (!UdlRuntimeConfig.IsUdlEngineLoadDisabled() && File.Exists(udlConfigPath))
-                {                  
+                bool udlDisabled = UdlRuntimeConfig.IsUdlEngineLoadDisabled();
+                bool udlExists = File.Exists(udlConfigPath);
+                report(string.Format("UDL: disabled={0}, configExists={1}, path={2}", udlDisabled, udlExists, udlConfigPath));
+
+                if (!udlDisabled && udlExists)
+                {
+                    report("new UDL2_Engine …");
                     deviceEngine = new UDL2_Engine();
+                    report("new UDL2_TCC …");
                     tccCtrl = new UDL2_TCC();
+                    report("new UDL2_FSTP …");
                     fstpCtrl = new UDL2_FSTP();
+                    report("new UDL2_OSW …");
                     oswCtrl = new UDL2_OSW();
-                    deviceEngine.SetDebugLogFile(Environment.CurrentDirectory + "\\UDLlog.txt");
+                    report("UDL COM 对象创建完成");
+
+                    string udlLog = Environment.CurrentDirectory + "\\UDLlog.txt";
+                    report("SetDebugLogFile → " + udlLog);
+                    deviceEngine.SetDebugLogFile(udlLog);
+
+                    report("LoadConfiguration 开始");
                     deviceEngine.LoadConfiguration(udlConfigPath);
+                    report("LoadConfiguration 结束，检查 LastError");
                     if (!GetUDLMessage(ref errMsg))
                     {
-                        errMsg="加载UDL配置出错：" + errMsg;
+                        errMsg = "加载UDL配置出错：" + errMsg;
+                        report("LoadConfiguration 失败: " + errMsg);
                         return 1;
                     }
-                    
+                    report("LoadConfiguration OK");
+
+                    report(">>> OpenEngine 开始（若此后长时间无新日志，即卡在 UDL OpenEngine）");
                     deviceEngine.OpenEngine();
+                    report("<<< OpenEngine 返回，检查 LastError");
                     if (!GetUDLMessage(ref errMsg))
                     {
                         errMsg = "UDL Open出错：" + errMsg;
+                        report("OpenEngine 失败: " + errMsg);
                         return 1;
                     }
-                    
+                    report("OpenEngine OK");
                 }
+                else
+                {
+                    report("跳过 UDL Engine（禁用或无 UDLConfig.xml）");
+                }
+
+                string deviceConfigPath = System.Environment.CurrentDirectory + "\\set\\Deviceconfig.xml";
+                report("ParseConfig → " + deviceConfigPath);
                 List<string> useNameList;
-                //读取当前配置设备的配置文件
-                ConfigXmlParser.ParseConfig(System.Environment.CurrentDirectory + "\\set\\Deviceconfig.xml", out useNameList, out usedDeviceConfigs);
+                ConfigXmlParser.ParseConfig(deviceConfigPath, out useNameList, out usedDeviceConfigs);
                 OpticalSwitchConfigNames.NormalizeMplusSwitchShowName(usedDeviceConfigs);
                 if (usedDeviceConfigs == null)
                 {
                     errMsg = "设备初始化 error:" + "未配置任何设备" + "\r";
+                    report(errMsg.Trim());
                     return 1;
                 }
+
+                int deviceCount = 0;
+                foreach (List<DeviceConfig> configs in usedDeviceConfigs)
+                {
+                    if (configs != null)
+                        deviceCount += configs.Count;
+                }
+                report(string.Format("Deviceconfig 共 {0} 台设备，开始逐个初始化", deviceCount));
 
                 foreach (List<DeviceConfig> configs in usedDeviceConfigs)
                 {
                     foreach (DeviceConfig config in configs)
                     {
+                        report(string.Format("init device: Type={0} Name={1}", config.ControlName, config.ShowName));
                         MolexUtility.CommonFunction.WriteLog(string.Format("init device:{0}", config.ControlName));
                         if (config.ControlName == Devices.Pwm1830.GetAdditional())
                         {                           
@@ -340,22 +403,166 @@ namespace DeviceControl
                             UDLTccCtrl tccObj = new UDLTccCtrl();
                             tccObj.deviceGUID = Convert.ToInt32(config.Control[0]);
                             udlTccs.Add(tccObj);
+                            report(string.Format("UDLTCC 已注册 GUID={0}", tccObj.deviceGUID));
                         }
+                        report(string.Format("init device 完成: {0}", config.ControlName));
                     }
                 }
+                report("全部设备初始化循环结束");
             }
             catch(Exception ex)
             {
                 errMsg += System.Reflection.MethodBase.GetCurrentMethod().DeclaringType.FullName + "."
                     + System.Reflection.MethodBase.GetCurrentMethod().Name + " error:" + ex.Message + "\r";
+                report("异常: " + ex.Message);
                 return 1;
             }
 
             if (errMsg.Length > 0)
+            {
+                report("InitDeviceByConfig 结束，部分错误 return=2");
                 return 2;
+            }
+            report("InitDeviceByConfig 结束 OK return=0");
             return 0;
         }
 
+        /// <summary>
+        /// 仅初始化循环箱 TCC：只创建 UDL Engine + TCC（不创建 FSTP/OSW），
+        /// Deviceconfig 中非 UDLTCC 设备全部跳过。供 TccTempTest 等探针使用。
+        /// 优先使用 set\UDLConfig_TCC.xml（若存在），否则 set\UDLConfig.xml。
+        /// </summary>
+        public int InitTccOnly(ref string errMsg, Action<string> progress)
+        {
+            Action<string> report = msg =>
+            {
+                try
+                {
+                    if (progress != null)
+                        progress(msg);
+                }
+                catch
+                {
+                }
+                try
+                {
+                    MolexUtility.CommonFunction.WriteLog("[InitTccOnly] " + msg);
+                }
+                catch
+                {
+                }
+            };
+
+            try
+            {
+                report("InitTccOnly: EnsureDeviceLists");
+                EnsureDeviceLists();
+                if (udlTccs != null)
+                    udlTccs.Clear();
+
+                string udlConfigTcc = Path.Combine(Environment.CurrentDirectory, "set", "UDLConfig_TCC.xml");
+                string udlConfigDefault = Path.Combine(Environment.CurrentDirectory, "set", "UDLConfig.xml");
+                string udlConfigPath = File.Exists(udlConfigTcc) ? udlConfigTcc : udlConfigDefault;
+                bool udlDisabled = UdlRuntimeConfig.IsUdlEngineLoadDisabled();
+                bool udlExists = File.Exists(udlConfigPath);
+                report(string.Format("UDL: disabled={0}, configExists={1}, path={2}",
+                    udlDisabled, udlExists, udlConfigPath));
+                if (File.Exists(udlConfigTcc))
+                    report("使用精简配置 UDLConfig_TCC.xml（推荐仅含 TCC）");
+                else
+                    report("未找到 UDLConfig_TCC.xml，使用完整 UDLConfig.xml（OpenEngine 仍可能打开配置内其它设备）");
+
+                if (udlDisabled || !udlExists)
+                {
+                    errMsg = "InitTccOnly: 需要可用的 UDLConfig（且未 DisableUDLEngine）";
+                    report(errMsg);
+                    return 1;
+                }
+
+                report("new UDL2_Engine …");
+                deviceEngine = new UDL2_Engine();
+                report("new UDL2_TCC …（不创建 FSTP/OSW）");
+                tccCtrl = new UDL2_TCC();
+                fstpCtrl = null;
+                oswCtrl = null;
+                report("UDL Engine+TCC 创建完成");
+
+                string udlLog = Path.Combine(Environment.CurrentDirectory, "UDLlog.txt");
+                report("SetDebugLogFile → " + udlLog);
+                deviceEngine.SetDebugLogFile(udlLog);
+
+                report("LoadConfiguration 开始");
+                deviceEngine.LoadConfiguration(udlConfigPath);
+                report("LoadConfiguration 结束，检查 LastError");
+                if (!GetUDLMessage(ref errMsg))
+                {
+                    errMsg = "加载UDL配置出错：" + errMsg;
+                    report("LoadConfiguration 失败: " + errMsg);
+                    return 1;
+                }
+                report("LoadConfiguration OK");
+
+                report(">>> OpenEngine 开始（若卡住：请检查 UDLConfig 是否含非 TCC 设备端口）");
+                deviceEngine.OpenEngine();
+                report("<<< OpenEngine 返回，检查 LastError");
+                if (!GetUDLMessage(ref errMsg))
+                {
+                    errMsg = "UDL Open出错：" + errMsg;
+                    report("OpenEngine 失败: " + errMsg);
+                    return 1;
+                }
+                report("OpenEngine OK");
+
+                string deviceConfigPath = Path.Combine(Environment.CurrentDirectory, "set", "Deviceconfig.xml");
+                report("ParseConfig → " + deviceConfigPath);
+                List<string> useNameList;
+                ConfigXmlParser.ParseConfig(deviceConfigPath, out useNameList, out usedDeviceConfigs);
+                if (usedDeviceConfigs == null)
+                {
+                    errMsg = "设备初始化 error:未配置任何设备\r";
+                    report(errMsg.Trim());
+                    return 1;
+                }
+
+                int tccCount = 0;
+                foreach (List<DeviceConfig> configs in usedDeviceConfigs)
+                {
+                    if (configs == null)
+                        continue;
+                    foreach (DeviceConfig config in configs)
+                    {
+                        if (config.ControlName == Devices.UDLTCC.GetAdditional())
+                        {
+                            UDLTccCtrl tccObj = new UDLTccCtrl();
+                            tccObj.deviceGUID = Convert.ToInt32(config.Control[0]);
+                            udlTccs.Add(tccObj);
+                            tccCount++;
+                            report(string.Format("注册 UDLTCC GUID={0} Name={1}", tccObj.deviceGUID, config.ShowName));
+                        }
+                        else
+                        {
+                            report(string.Format("跳过非 TCC 设备: Type={0} Name={1}", config.ControlName, config.ShowName));
+                        }
+                    }
+                }
+
+                if (tccCount == 0)
+                {
+                    errMsg = "InitTccOnly: Deviceconfig 中无 Type=UDLTCC 条目\r";
+                    report(errMsg.Trim());
+                    return 1;
+                }
+
+                report(string.Format("InitTccOnly 完成，已注册 {0} 个 TCC", tccCount));
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                errMsg += "InitTccOnly error:" + ex.Message + "\r";
+                report("异常: " + ex.Message);
+                return 1;
+            }
+        }
 
         /// <summary>
         /// 关闭所有设备
