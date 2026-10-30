@@ -129,6 +129,7 @@ namespace DeviceControl
                         }
                     }
                     MolexUtility.CommonFunction.WriteLog("Read data success");
+                    ArchiveExistingScanCsvBeforeOverwrite(path);
                     FileStream stream = File.Open(path, FileMode.Create);
                     StreamWriter writer = new StreamWriter(stream);
                     string title = string.Format("WL,Power");
@@ -151,6 +152,7 @@ namespace DeviceControl
                             return;
                         }
                     }
+                    ArchiveExistingScanCsvBeforeOverwrite(path);
                     FileStream stream = File.Open(path, FileMode.Create);
                     StreamWriter writer = new StreamWriter(stream);
                     string title = string.Format("WL,Power");
@@ -175,6 +177,30 @@ namespace DeviceControl
                 pwmIdxs[i] = Convert.ToInt32(splits[i]);
             }
             return 0;
+        }
+
+        /// <summary>
+        /// 覆盖写入 ScanWithPDLPort*.csv 前，将已有文件归档到 rawdata\archive\{yyyyMMdd_HHmmss}_文件名。
+        /// 失败只记日志，不阻断扫描。
+        /// </summary>
+        private static void ArchiveExistingScanCsvBeforeOverwrite(string path)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                    return;
+                string archiveDir = Path.Combine(Environment.CurrentDirectory, "rawdata", "archive");
+                if (!Directory.Exists(archiveDir))
+                    Directory.CreateDirectory(archiveDir);
+                string stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                string dest = Path.Combine(archiveDir, stamp + "_" + Path.GetFileName(path));
+                File.Copy(path, dest, true);
+                MolexUtility.CommonFunction.WriteLog("Archive scan CSV: " + dest);
+            }
+            catch (Exception ex)
+            {
+                MolexUtility.CommonFunction.WriteLog("Archive scan CSV failed: " + path + " " + ex.Message);
+            }
         }
 
         private static bool TryGetUdlError(ref string errMsg)
@@ -442,6 +468,7 @@ namespace DeviceControl
                     if (GetMeasureResultWithTETM(i, out dWL[0], out aveIL[0], out pdl[0], out te[0], out tm[0], out tapIL[0], out realCount, ref errMsg) != 0)
                         return 2;
                     MolexUtility.CommonFunction.WriteLog("Read data success");
+                    ArchiveExistingScanCsvBeforeOverwrite(path);
                     FileStream stream = File.Open(path, FileMode.Create);
                     StreamWriter writer = new StreamWriter(stream);
                     string title = string.Format("WL,Power,IL,TE,TM");
@@ -458,6 +485,7 @@ namespace DeviceControl
                 {
                     if (GetMeasureResult(i, out dWL[0], out aveIL[0], out pdl[0], out tapIL[0], out realCount, ref errMsg) != 0)
                         return 2;
+                    ArchiveExistingScanCsvBeforeOverwrite(path);
                     FileStream stream = File.Open(path, FileMode.Create);
                     StreamWriter writer = new StreamWriter(stream);
                     string title = string.Format("WL,Power");

@@ -14,6 +14,11 @@ namespace UIOperateInterleaverFinalTest
         /// </summary>
         private const double lightSpeed = 2.99792458E8;
 
+        /// <summary>
+        /// 归零与测试波长匹配容差（nm），避免 double 绝对相等误伤。
+        /// </summary>
+        private const double WlMatchToleranceNm = 1e-6;
+
 
         /// <summary>
         /// 读取扫描数据
@@ -179,9 +184,11 @@ namespace UIOperateInterleaverFinalTest
                 if (!File.Exists(path))
                 {
                     errMsg = "数据文件不存在！";
+                    CommonFunction.WriteLog(string.Format("[ScanCalDiag] ReadScanData FAIL fileMissing path={0}", path));
                     return 1;
                 }
 
+                FileInfo fi = new FileInfo(path);
                 StreamReader sR = new StreamReader(path);
                 int dataCount = 0;
                 while (sR.ReadLine() != null)
@@ -195,14 +202,91 @@ namespace UIOperateInterleaverFinalTest
                 InitRawdataBuffer(rawdata, dataCount);
                 ParserRawdata(sR, dataCount, ref rawdata);
                 sR.Close();
+                CommonFunction.WriteLog(string.Format(
+                    "[ScanCalDiag] ReadScanData OK path={0} size={1}B pts={2} {3}",
+                    path, fi.Length, dataCount, DescribeRawBuffer("buf", rawdata)));
                 return 0;
             }
             catch (Exception ex)
             {
                 errMsg += System.Reflection.MethodBase.GetCurrentMethod().DeclaringType.FullName + "."
                     + System.Reflection.MethodBase.GetCurrentMethod().Name + " error:" + ex.Message + "\r";
+                CommonFunction.WriteLog(string.Format("[ScanCalDiag] ReadScanData EXCEPTION path={0} ex={1}", path, ex.Message));
                 return 2;
             }
+        }
+
+        /// <summary>
+        /// 诊断用：摘要 rawdata 点数与首末波长/功率。
+        /// </summary>
+        public static string DescribeRawBuffer(string name, double[][] rawdata)
+        {
+            if (rawdata == null)
+                return name + "=null";
+            if (rawdata.Length == 0)
+                return name + ".len=0";
+            if (rawdata[0] == null)
+                return name + "[0]=null";
+            int n = rawdata[0].Length;
+            if (n == 0)
+                return name + ": pts=0";
+            string wl0 = rawdata[0][0].ToString("F6");
+            string wlN = rawdata[0][n - 1].ToString("F6");
+            string p0 = (rawdata.Length > 1 && rawdata[1] != null && rawdata[1].Length == n)
+                ? rawdata[1][0].ToString("F3") : "n/a";
+            string pMid = (rawdata.Length > 1 && rawdata[1] != null && rawdata[1].Length == n)
+                ? rawdata[1][n / 2].ToString("F3") : "n/a";
+            return string.Format("{0}: pts={1} WL[{2}..{3}] P[0]={4} P[mid]={5}", name, n, wl0, wlN, p0, pMid);
+        }
+
+        /// <summary>
+        /// 归零缓冲是否有可用波长点（内存有效，非仅磁盘文件存在）。
+        /// </summary>
+        public static bool HasValidRefBuffer(double[][] pdlRef)
+        {
+            return pdlRef != null
+                && pdlRef.Length > 1
+                && pdlRef[0] != null
+                && pdlRef[0].Length > 0
+                && pdlRef[1] != null
+                && pdlRef[1].Length == pdlRef[0].Length;
+        }
+
+        /// <summary>
+        /// 根据错误文案写一条产品/程序定性提示，便于事后 grep CLASSIFY。
+        /// </summary>
+        public static void LogScanCalClassify(string stage, string errMsg, bool isRefFlag, bool refBufferOk)
+        {
+            string kind;
+            string action;
+            if (string.IsNullOrEmpty(errMsg) && refBufferOk)
+            {
+                kind = "ok";
+                action = "continue";
+            }
+            else if (!refBufferOk || (errMsg != null && (errMsg.Contains("无归零") || errMsg.Contains("归零内存"))))
+            {
+                kind = "product_rule";
+                action = "重新系统归零（勿跳过扣归零）";
+            }
+            else if (errMsg != null && (errMsg.Contains("波长不一致") || errMsg.Contains("ptsMismatch") || errMsg.Contains("扫描范围")))
+            {
+                kind = "product_or_range";
+                action = "同扫描范围重归零后再测；若点数相同且波长差极小则查程序容差";
+            }
+            else if (!isRefFlag)
+            {
+                kind = "product_rule";
+                action = "未标已归零，请先系统归零";
+            }
+            else
+            {
+                kind = "program_or_config";
+                action = "查 CalResByPort/模板温度/端口名与 [ScanCalDiag] 明细";
+            }
+            CommonFunction.WriteLog(string.Format(
+                "[ScanCalDiag] CLASSIFY stage={0} kind={1} IsRef={2} refBufOk={3} action={4} err={5}",
+                stage, kind, isRefFlag, refBufferOk, action, errMsg ?? ""));
         }
 
         /// <summary>
@@ -253,9 +337,21 @@ namespace UIOperateInterleaverFinalTest
         {
             try
             {
+                CommonFunction.WriteLog(string.Format(
+                    "[ScanCalDiag] CalFSTPRawdata enter {0} | {1}",
+                    DescribeRawBuffer("ref", pdlRef), DescribeRawBuffer("test", resultData)));
                 if (pdlRef == null)
                 {
                     errMsg = "无归零数据！";
+                    CommonFunction.WriteLog("[ScanCalDiag] CalFSTPRawdata FAIL pdlRef=null");
+                    LogScanCalClassify("CalFSTPRawdata", errMsg, false, false);
+                    return;
+                }
+                if (pdlRef[0] == null || resultData == null || resultData[0] == null)
+                {
+                    errMsg = "无归零数据！";
+                    CommonFunction.WriteLog("[ScanCalDiag] CalFSTPRawdata FAIL ref/test WL buffer null");
+                    LogScanCalClassify("CalFSTPRawdata", errMsg, false, false);
                     return;
                 }
                 double[][] res = resultData;
@@ -270,32 +366,71 @@ namespace UIOperateInterleaverFinalTest
 
                 double[] refFre = pdlRef[6];
 
+                if (refWL == null || refAve == null || refFre == null)
+                {
+                    errMsg = "无归零数据！";
+                    CommonFunction.WriteLog("[ScanCalDiag] CalFSTPRawdata FAIL refWL/refAve/refFre null");
+                    LogScanCalClassify("CalFSTPRawdata", errMsg, false, false);
+                    return;
+                }
+                if (refWL.Length == 0 || testWL.Length == 0)
+                {
+                    errMsg = "无归零数据！";
+                    CommonFunction.WriteLog(string.Format(
+                        "[ScanCalDiag] CalFSTPRawdata FAIL empty pts refLen={0} testLen={1}",
+                        refWL.Length, testWL.Length));
+                    LogScanCalClassify("CalFSTPRawdata", errMsg, false, false);
+                    return;
+                }
+                if (refWL.Length != testWL.Length)
+                {
+                    errMsg = string.Format(
+                        "归零波长与测试波长不一致，请重新归零！(点数 ref={0} test={1})",
+                        refWL.Length, testWL.Length);
+                    CommonFunction.WriteLog(string.Format(
+                        "[ScanCalDiag] CalFSTPRawdata FAIL ptsMismatch refLen={0} testLen={1}",
+                        refWL.Length, testWL.Length));
+                    LogScanCalClassify("CalFSTPRawdata", errMsg, true, true);
+                    return;
+                }
 
                 int Count = resultData[0].Length;
+                // 先整段校验波长，任一点超差立即返回，避免半截扣减
+                for (int i = 0; i < Count; i++)
+                {
+                    double dWl = Math.Abs(testWL[i] - refWL[i]);
+                    if (dWl > WlMatchToleranceNm)
+                    {
+                        errMsg = string.Format(
+                            "归零波长与测试波长不一致，请重新归零！(idx={0} test={1:F6} ref={2:F6} d={3:E2})",
+                            i, testWL[i], refWL[i], dWl);
+                        CommonFunction.WriteLog(string.Format(
+                            "[ScanCalDiag] CalFSTPRawdata FAIL wlMismatch firstIdx={0}/{1} testWL={2:F6} refWL={3:F6} dWl={4:E2} tol={5:E2}",
+                            i, Count, testWL[i], refWL[i], dWl, WlMatchToleranceNm));
+                        LogScanCalClassify("CalFSTPRawdata", errMsg, true, true);
+                        return;
+                    }
+                }
 
                 for (int i = 0; i < Count; i++)
                 {
-                    //判断归零和测试波长是否一致
-                    if (testWL[i] == refWL[i])
-                    {
-                        //计算ave IL
-                        res[1][i] = res[1][i] - refAve[i];
-                        res[3][i] = res[3][i] - refAve[i];
-                        res[4][i] = res[4][i] - refAve[i];
+                    //计算ave IL
+                    res[1][i] = res[1][i] - refAve[i];
+                    res[3][i] = res[3][i] - refAve[i];
+                    res[4][i] = res[4][i] - refAve[i];
 
-                        //频率
-                        res[5][i] = refFre[i];
-                    }
-                    else
-                    {
-                        errMsg = "归零波长与测试波长不一致，请重新归零！";
-                    }
+                    //频率
+                    res[5][i] = refFre[i];
                 }
+                CommonFunction.WriteLog(string.Format(
+                    "[ScanCalDiag] CalFSTPRawdata OK afterSubtract tol={0:E2} {1}",
+                    WlMatchToleranceNm, DescribeRawBuffer("IL", res)));
             }
             catch (Exception ex)
             {
                 errMsg += System.Reflection.MethodBase.GetCurrentMethod().DeclaringType.FullName + "."
                     + System.Reflection.MethodBase.GetCurrentMethod().Name + " error:" + ex.Message + "\r";
+                CommonFunction.WriteLog(string.Format("[ScanCalDiag] CalFSTPRawdata EXCEPTION {0}", ex.Message));
                 return;
             }
         }

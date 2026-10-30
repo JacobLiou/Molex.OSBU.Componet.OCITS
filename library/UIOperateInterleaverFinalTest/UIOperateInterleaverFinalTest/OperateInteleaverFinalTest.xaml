@@ -42,6 +42,9 @@
                     <Label Content="PN:" Margin="2" VerticalAlignment="Center"/>
                     <TextBox Name="txtPN"  Height="30" Margin="5,2,2,2"  BorderBrush="#96CDCD" Text="{Binding PN}" BorderThickness="2" IsReadOnly="True" IsEnabled="False"/>
                 </DockPanel>
+                <Button Grid.Row="0" Grid.Column="2" Name="btnCleanupStaleFiles" Content="清理过期文件"
+                        ToolTip="删除 temple/reference/rawdata/data/lightdata 中超过10天的文件（含 rawdata\archive）"
+                        Margin="5,2,5.333,2" FontWeight="Black" FontSize="12" Click="btnCleanupStaleFiles_Click" Height="24" VerticalAlignment="Bottom"/>
                 <Button Grid.Row="1" Grid.Column="2" Name="btnOpenTemplate" Content="打开模板"  Margin="5,5,5.333,0" FontWeight="Black" FontSize="14" Click="btnOpenTemplate_Click" Height="24" VerticalAlignment="Top"/>
                 <Button Grid.Row="6" Grid.Column="0" Name="btnSaveToAMTS" IsEnabled="{Binding IsSaveEnable}" Content="上传数据"  Margin="5"   FontWeight="Black" FontSize="14" Click="btnSaveToAMTS_Click"/>
                 <Button Name="btnScanRef" Grid.Row="5"  Grid.Column="0" IsEnabled="{Binding isReferenceEnable}" Content="系统归零"   Margin="5"  DockPanel.Dock="Left"  VerticalAlignment="Stretch"  FontWeight="Black" FontSize="14" Click="btnScanRef_Click"/>

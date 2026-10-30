@@ -110,6 +110,11 @@ namespace UIOperateInterleaverFinalTest
         private const int rerefHours = 6;
 
         /// <summary>
+        /// 手动「清理过期文件」：删除运行目录数据文件夹中超过该天数的文件
+        /// </summary>
+        private const int staleDataDays = 10;
+
+        /// <summary>
         /// 最老的归零时间，用于6小时归零倒计时（同批会话统一时间戳）
         /// </summary>
         private DateTime oldestRefTime = new DateTime();
@@ -497,15 +502,12 @@ namespace UIOperateInterleaverFinalTest
         }
 
         /// <summary>
-        /// 超期清除：删文件、清内存、标未归零。仅在允许清除时调用。
+        /// 超期失效：清内存、标未归零并提示重归零。磁盘 reference CSV 保留供回归（由「清理过期文件」按天清理）。
         /// </summary>
         private void ClearAllReferenceDataDueToExpiry()
         {
             for (int i = 0; i < portAssistant.Count; i++)
             {
-                string pdlRefPath = string.Format("{0}-product{1}-port{2}.csv", refWithPDLFile, portAssistant[i].ProductIndex, portAssistant[i].PortIndex);
-                if (File.Exists(pdlRefPath))
-                    File.Delete(pdlRefPath);
                 InterleaverScanResult.InitRawdataBuffer(portPDLRef[portAssistant[i].OperateIndex]);
                 portAssistant[i].IsRef = false;
                 UpdateReferenceStatus(portAssistant[i].ProductIndex - 1, portAssistant[i]);
@@ -513,7 +515,7 @@ namespace UIOperateInterleaverFinalTest
             oldestRefTime = new DateTime();
             refSessionWriteTime = new DateTime();
             refExpiryClearDeferredNotified = false;
-            RealtimeMsg("归零数据已超期并已清除，请重新系统归零。", StatusType.Warning);
+            RealtimeMsg("归零数据已超期，请重新系统归零。", StatusType.Warning);
         }
 
         /// <summary>
@@ -1217,6 +1219,8 @@ namespace UIOperateInterleaverFinalTest
             {
                 List<MESTestInfo> testInfos = allProductControl[productID].GetAllTestInfo();
                 List<MESTestInfo> shows = testShowControl[productID].GetAllTestInfo();
+                int syncCount = 0;
+                int testedNonDefault = 0;
                 for (int i = 0; i < testInfos.Count; i++)
                 {
                     if (!ShouldShowTestItemInList(testInfos[i]))
@@ -1230,9 +1234,22 @@ namespace UIOperateInterleaverFinalTest
                             bool isPass = false;
                             testShowControl[productID].UpdateTestData(j, testInfos[i].CurValue, ref isPass);
                             UpdateItem(testShowControl[productID].GetAllTestInfo()[j], productID, j);
+                            syncCount++;
+                            if (testInfos[i].Tested && !CommonFunction.IsDefault(testInfos[i].CurValue))
+                                testedNonDefault++;
+                            if (syncCount <= 12)
+                            {
+                                CommonFunction.WriteLog(string.Format(
+                                    "[ScanCalDiag] ParamItemUpdate sync showRow={0} port={1} tmpt={2} param={3} value={4} tested={5}",
+                                    j, testInfos[i].PortNameForUser, testInfos[i].Temperature,
+                                    testInfos[i].ExParamName, testInfos[i].CurValue, testInfos[i].Tested));
+                            }
                         }
                     }
                 }
+                CommonFunction.WriteLog(string.Format(
+                    "[ScanCalDiag] ParamItemUpdate product={0} syncedShowRows={1} testedNonDefault={2} showCount={3}",
+                    productID, syncCount, testedNonDefault, shows.Count));
                 // 更新测试信息
             }
         }
@@ -1636,6 +1653,75 @@ namespace UIOperateInterleaverFinalTest
             
         }
 
+
+        private void btnCleanupStaleFiles_Click(object sender, RoutedEventArgs e)
+        {
+            if (!GetIsScanFinished())
+            {
+                MessageBox.Show("正在扫描，请稍后再清理过期文件。", "清理过期文件", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            if (bakeTimeCheckBK != null && bakeTimeCheckBK.IsBusy)
+            {
+                MessageBox.Show("正在烤温，请稍后再清理过期文件。", "清理过期文件", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            if (curBakeStatus == BakeStatus.Baking)
+            {
+                MessageBox.Show("正在烤温，请稍后再清理过期文件。", "清理过期文件", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            string confirm = string.Format(
+                "将删除运行目录下 temple、reference、rawdata（含 archive）、data、lightdata 中修改时间早于 {0} 天的所有文件。\r\n此操作不可恢复，是否继续？",
+                staleDataDays);
+            if (MessageBox.Show(confirm, "清理过期文件", MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK)
+                return;
+
+            int deleted = 0;
+            int failed = 0;
+            DateTime cutoff = DateTime.Now.AddDays(-staleDataDays);
+            string[] dirs = { "temple", "reference", "rawdata", "data", "lightdata" };
+            string root = Environment.CurrentDirectory;
+            foreach (string dirName in dirs)
+            {
+                string dirPath = Path.Combine(root, dirName);
+                if (!Directory.Exists(dirPath))
+                    continue;
+                string[] files;
+                try
+                {
+                    files = Directory.GetFiles(dirPath, "*", SearchOption.AllDirectories);
+                }
+                catch (Exception ex)
+                {
+                    CommonFunction.WriteLog("[CleanupStale] list failed: " + dirPath + " " + ex.Message);
+                    failed++;
+                    continue;
+                }
+                foreach (string file in files)
+                {
+                    try
+                    {
+                        if (File.GetLastWriteTime(file) >= cutoff)
+                            continue;
+                        File.Delete(file);
+                        deleted++;
+                        CommonFunction.WriteLog("[CleanupStale] deleted: " + file);
+                    }
+                    catch (Exception ex)
+                    {
+                        failed++;
+                        CommonFunction.WriteLog("[CleanupStale] delete failed: " + file + " " + ex.Message);
+                    }
+                }
+            }
+
+            string summary = string.Format("清理完成：删除 {0} 个文件，失败 {1} 个。", deleted, failed);
+            RealtimeMsg(summary, failed > 0 ? StatusType.Warning : StatusType.Normal);
+            MessageBox.Show(summary, "清理过期文件", MessageBoxButton.OK,
+                failed > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+        }
 
         private int referenceIndex = 0;
         private void btnScanRef_Click(object sender, RoutedEventArgs e)
@@ -2614,20 +2700,70 @@ namespace UIOperateInterleaverFinalTest
                     //InitRawdataBuffer(ref rawdata);
                     if (scanInfo.ScanType == SCANTYPE.TestWithPDL || scanInfo.ScanType == SCANTYPE.TestWithPDLOnekey)
                     {
+                        CommonFunction.WriteLog(string.Format(
+                            "[ScanCalDiag] FSTP test-read begin product={0} ports={1} type={2}",
+                            scanInfo.ProductIndex, string.Join(",", scanInfo.Ports), scanInfo.ScanType));
                         for (int j = 0; j < scanInfo.Ports.Count; j++)
                         {
                             int pmIndex;
                             if (!TryGetPmIndexForPort(scanInfo.Ports[j], out pmIndex, ref errMsg))
+                            {
+                                CommonFunction.WriteLog(string.Format(
+                                    "[ScanCalDiag] TryGetPmIndexForPort FAIL port={0} err={1}",
+                                    scanInfo.Ports[j], errMsg));
                                 return 2;
+                            }
                             int dataIndex = (scanInfo.ProductIndex - 1) * portAndNameDic.Count + scanInfo.Ports[j] - 1;
+                            bool isRef = false;
+                            string assistName = "";
+                            foreach (PortAssist a in portAssistant)
+                            {
+                                if (a.ProductIndex == scanInfo.ProductIndex && a.PortIndex == scanInfo.Ports[j]
+                                    && Math.Abs(a.TestTmpt - curTestTmpt) < 0.001)
+                                {
+                                    isRef = a.IsRef;
+                                    assistName = a.Name;
+                                    break;
+                                }
+                            }
 
                             string path = scanWithPDLFile + pmIndex.ToString() + ".csv";
-                            CommonFunction.WriteLog(string.Format("path:{0}", path));
-                            InterleaverScanResult.ReadScanData(path, portResData[dataIndex], ref errMsg);
-                            CommonFunction.WriteLog(string.Format("ReadScanData finished"));
-                            InterleaverScanResult.CalFSTPRawdata(portPDLRef[dataIndex], portResData[dataIndex], ref errMsg);
-                            CommonFunction.WriteLog(string.Format("CalFSTPRawdata finished"));
+                            string refDisk = string.Format("{0}-product{1}-port{2}.csv", refWithPDLFile, scanInfo.ProductIndex, scanInfo.Ports[j]);
+                            bool refBufOk = InterleaverScanResult.HasValidRefBuffer(portPDLRef[dataIndex]);
+                            CommonFunction.WriteLog(string.Format(
+                                "[ScanCalDiag] port={0} name={1} pm={2} dataIndex={3} IsRef={4} refBufOk={5} fileExists={6} refDiskExists={7} path={8}",
+                                scanInfo.Ports[j], assistName, pmIndex, dataIndex, isRef, refBufOk, File.Exists(path), File.Exists(refDisk), path));
+                            CommonFunction.WriteLog(string.Format(
+                                "[ScanCalDiag] beforeRead {0}",
+                                InterleaverScanResult.DescribeRawBuffer("portPDLRef", portPDLRef[dataIndex])));
 
+                            // 扫前硬校验：无有效归零内存则失败，避免空跑快扫后才报错
+                            if (!refBufOk)
+                            {
+                                errMsg = isRef
+                                    ? "归零内存丢失，请重新系统归零。"
+                                    : "无归零数据，请先系统归零。";
+                                InterleaverScanResult.LogScanCalClassify("PreCheckRefBuffer", errMsg, isRef, false);
+                                return 2;
+                            }
+
+                            int readRc = InterleaverScanResult.ReadScanData(path, portResData[dataIndex], ref errMsg);
+                            CommonFunction.WriteLog(string.Format(
+                                "[ScanCalDiag] ReadScanData rc={0} errLen={1} err={2}",
+                                readRc, errMsg == null ? -1 : errMsg.Length, errMsg));
+                            if (errMsg.Length > 0)
+                                return 2;
+
+                            InterleaverScanResult.CalFSTPRawdata(portPDLRef[dataIndex], portResData[dataIndex], ref errMsg);
+                            CommonFunction.WriteLog(string.Format(
+                                "[ScanCalDiag] CalFSTPRawdata done errLen={0} err={1} {2}",
+                                errMsg == null ? -1 : errMsg.Length, errMsg,
+                                InterleaverScanResult.DescribeRawBuffer("portResData", portResData[dataIndex])));
+                            if (errMsg.Length > 0)
+                            {
+                                InterleaverScanResult.LogScanCalClassify("CalFSTPRawdata", errMsg, isRef, refBufOk);
+                                return 2;
+                            }
                         }
                     }
                     return 0;
@@ -2638,6 +2774,7 @@ namespace UIOperateInterleaverFinalTest
             {
                 errMsg += System.Reflection.MethodBase.GetCurrentMethod().DeclaringType.FullName + "."
                     + System.Reflection.MethodBase.GetCurrentMethod().Name + " error:" + ex.Message + "\r";
+                CommonFunction.WriteLog(string.Format("[ScanCalDiag] ScanAndCalResultFSTP EXCEPTION {0}", ex.Message));
                 return 2;
             }
         }
@@ -2907,6 +3044,10 @@ namespace UIOperateInterleaverFinalTest
                 scanErrorMsg = "";
                 bool isFstpScan = true;
                 int res = 0;
+                CommonFunction.WriteLog(string.Format(
+                    "[ScanCalDiag] Scan_DoWork type={0} product={1} ports={2} curTmpt={3} openTpl={4} fstp={5}",
+                    scanDetailInfo.ScanType, scanDetailInfo.ProductIndex,
+                    string.Join(",", scanDetailInfo.Ports), curTestTmpt, GetOpenTemplateComplete(), isFstpScan));
                 if (isFstpScan)
                 {
                     CommonFunction.WriteLog("ScanAndCalResultFSTP begin");
@@ -2915,6 +3056,9 @@ namespace UIOperateInterleaverFinalTest
                 else
                     res = ScanAndCalResult(scanDetailInfo, ref scanErrorMsg);
                 SetIsScanFinished(true);
+                CommonFunction.WriteLog(string.Format(
+                    "[ScanCalDiag] Scan_DoWork afterScan res={0} errLen={1} err={2}",
+                    res, scanErrorMsg == null ? -1 : scanErrorMsg.Length, scanErrorMsg));
                 if (scanErrorMsg.Length > 0 || res != 0)
                 {
                     string errMsg = "";
@@ -2928,6 +3072,7 @@ namespace UIOperateInterleaverFinalTest
                         }
                         //ReconnectServer(ref errMsg);
                     }
+                    CommonFunction.WriteLog("[ScanCalDiag] Scan_DoWork SKIP CalAllResultInThread (scan fail)");
                     return;
                 }
                 else
@@ -2937,16 +3082,28 @@ namespace UIOperateInterleaverFinalTest
                         if (scanDetailInfo.ScanType == SCANTYPE.TestWithNoPDL || scanDetailInfo.ScanType == SCANTYPE.TestWithPDL
                             || scanDetailInfo.ScanType == SCANTYPE.TestWithPDLOnekey)
                         {
-                            string errMsg = "";
+                            CommonFunction.WriteLog("[ScanCalDiag] Scan_DoWork ENTER CalAllResultInThread");
                             //计算当前通道的参数结果。
                             CalAllResultInThread();
+                            CommonFunction.WriteLog("[ScanCalDiag] Scan_DoWork EXIT CalAllResultInThread");
                         }
+                        else
+                        {
+                            CommonFunction.WriteLog(string.Format(
+                                "[ScanCalDiag] Scan_DoWork SKIP paramCal scanType={0}", scanDetailInfo.ScanType));
+                        }
+                    }
+                    else
+                    {
+                        CommonFunction.WriteLog("[ScanCalDiag] Scan_DoWork SKIP CalAllResultInThread (template not complete)");
                     }
                 }
             }
             catch (Exception ex)
             {
-
+                CommonFunction.WriteLog(string.Format("[ScanCalDiag] Scan_DoWork EXCEPTION {0}\r{1}", ex.Message, ex.StackTrace));
+                if (string.IsNullOrEmpty(scanErrorMsg))
+                    scanErrorMsg = "Scan_DoWork异常:" + ex.Message;
             }
             finally
             {
@@ -3005,10 +3162,24 @@ namespace UIOperateInterleaverFinalTest
                 IInterleaverAlgorithm interleaverAlgorithm = (IInterleaverAlgorithm)Activator.CreateInstance(typeName);
                 ParamCal calFuntion = new ParamCal(interleaverAlgorithm);
                 int paramCount = allTestParam.Count;
+                int matched = 0;
+                int updated = 0;
+                int skippedTmpt = 0;
+                int skippedPort = 0;
+                int skippedParse = 0;
+                int failErr = 0;
+                CommonFunction.WriteLog(string.Format(
+                    "[ScanCalDiag] CalResByPort enter calPort={0} curTmpt={1} product={2} paramRows={3} {4}",
+                    calPort, curTestTmpt, CurProductIndex + 1, paramCount,
+                    InterleaverScanResult.DescribeRawBuffer("portRes",
+                        (CurProductIndex * portAndNameDic.Count + calPort - 1) >= 0
+                        && (CurProductIndex * portAndNameDic.Count + calPort - 1) < portResData.Count
+                            ? portResData[CurProductIndex * portAndNameDic.Count + calPort - 1] : null)));
                 for (int i = 0; i < paramCount; i++)
                 {
                     if (allTestParam[i].Temperature.CompareTo(curTestTmpt)!=0)
                     {
+                        skippedTmpt++;
                         continue;
                     }
                     string param = allTestParam[i].ExParamName;
@@ -3036,8 +3207,10 @@ namespace UIOperateInterleaverFinalTest
                         //不是当前扫描的通道
                         if (calPort != port)
                         {
+                            skippedPort++;
                             continue;
                         }
+                        matched++;
                         //不是扫描的温度，则返回
                         portName = portSplits[0];
                         bool isPass = true;
@@ -3045,31 +3218,73 @@ namespace UIOperateInterleaverFinalTest
                         double paramResult = CommonFunction.GetDefaultValue();
                         int dataIndex = CurProductIndex * portAndNameDic.Count + port - 1;
                         int adjPortIndex = FindAdjPortIndex(portName);
+                        // 按行隔离：单参数失败不写入 errMsg，避免连坐阻断同口后续参数
+                        string calErr = "";
                         if (adjPortIndex != -1)
                         {
                             int adjDataIndex = CurProductIndex * portAndNameDic.Count + adjPortIndex - 1;
-                            paramResult = calFuntion.CalChannelTestParam(param,minScanFre,maxScanFre, portResData[dataIndex], portResData[adjDataIndex], fre, productFre, ref errMsg);
+                            paramResult = calFuntion.CalChannelTestParam(param,minScanFre,maxScanFre, portResData[dataIndex], portResData[adjDataIndex], fre, productFre, ref calErr);
                         }
                         else
                         {
-                            paramResult = calFuntion.CalChannelTestParam(param, minScanFre, maxScanFre, portResData[dataIndex], null, fre, productFre, ref errMsg);
+                            paramResult = calFuntion.CalChannelTestParam(param, minScanFre, maxScanFre, portResData[dataIndex], null, fre, productFre, ref calErr);
+                        }
+                        if (calErr.Length > 0)
+                        {
+                            failErr++;
+                            CommonFunction.WriteLog(string.Format(
+                                "[ScanCalDiag] CalChannelTestParam FAIL row={0} portUser={1} param={2} fre={3} err={4}",
+                                i, allTestParam[i].PortNameForUser, param, fre, calErr));
+                            continue;
                         }
                         paramResult = Math.Round(paramResult, 3);
                         string[] paramSplits = param.Split('@');
                         //string maxILParam = "MAXIL@PB=" + passBand.ToString();
                         if (paramSplits[0].ToUpper() != "MAXIL")
-                            AddResultToRecord(curPortRecords, param, portSplits[0], allTestParam[i].Temperature.ToString(), paramResult, ref errMsg);
-                        if (errMsg.Length == 0)
-                        {             
-                            allProductControl[CurProductIndex].UpdateTestData(i, paramResult, ref isPass);
+                        {
+                            string recErr = "";
+                            AddResultToRecord(curPortRecords, param, portSplits[0], allTestParam[i].Temperature.ToString(), paramResult, ref recErr);
+                            if (recErr.Length > 0)
+                            {
+                                failErr++;
+                                CommonFunction.WriteLog(string.Format(
+                                    "[ScanCalDiag] AddResultToRecord FAIL row={0} err={1}", i, recErr));
+                                continue;
+                            }
+                        }
+                        allProductControl[CurProductIndex].UpdateTestData(i, paramResult, ref isPass);
+                        updated++;
+                        if (CommonFunction.IsDefault(paramResult) || updated <= 8)
+                        {
+                            CommonFunction.WriteLog(string.Format(
+                                "[ScanCalDiag] UpdateTestData row={0} portUser={1} param={2} fre={3} value={4} pass={5} default={6}",
+                                i, allTestParam[i].PortNameForUser, param, fre, paramResult, isPass, CommonFunction.IsDefault(paramResult)));
                         }
                     }
+                    else
+                    {
+                        skippedParse++;
+                    }
+                }
+                CommonFunction.WriteLog(string.Format(
+                    "[ScanCalDiag] CalResByPort summary calPort={0} matched={1} updated={2} skipTmpt={3} skipPort={4} skipParse={5} fail={6}",
+                    calPort, matched, updated, skippedTmpt, skippedPort, skippedParse, failErr));
+                if (matched == 0)
+                {
+                    InterleaverScanResult.LogScanCalClassify("CalResByPort",
+                        string.Format("matched=0 curTmpt={0}", curTestTmpt), true, true);
+                }
+                else if (updated == 0 && failErr > 0)
+                {
+                    InterleaverScanResult.LogScanCalClassify("CalResByPort",
+                        string.Format("updated=0 fail={0}", failErr), true, true);
                 }
             }
             catch (Exception ex)
             {
                 errMsg += System.Reflection.MethodBase.GetCurrentMethod().DeclaringType.FullName + "."
                     + System.Reflection.MethodBase.GetCurrentMethod().Name + " error:" + ex.Message + "\r";
+                CommonFunction.WriteLog(string.Format("[ScanCalDiag] CalResByPort EXCEPTION calPort={0} {1}", calPort, ex.Message));
                 return;
             }
 
@@ -3249,7 +3464,11 @@ namespace UIOperateInterleaverFinalTest
             int portIndex = Convert.ToInt32(param);
             string errMsg = "";
             SetCalFinished(portIndex, false);
-            CalResByPort(scanDetailInfo.Ports[portIndex], ref errMsg);
+            int scanPort = scanDetailInfo.Ports[portIndex];
+            CommonFunction.WriteLog(string.Format("[ScanCalDiag] ChannelCalThread start idx={0} scanPort={1}", portIndex, scanPort));
+            CalResByPort(scanPort, ref errMsg);
+            if (errMsg.Length > 0)
+                CommonFunction.WriteLog(string.Format("[ScanCalDiag] ChannelCalThread err idx={0} scanPort={1} err={2}", portIndex, scanPort, errMsg));
             SetCalFinished(portIndex, true);
         }
 
@@ -3259,6 +3478,8 @@ namespace UIOperateInterleaverFinalTest
         /// </summary>
         private void CalAllResultInThread()
         {
+            CommonFunction.WriteLog(string.Format(
+                "[ScanCalDiag] CalAllResultInThread begin ports={0}", string.Join(",", scanDetailInfo.Ports)));
             curPortRecords.Clear();
             isPortCalFinished.Clear();
             for(int i=0;i<scanDetailInfo.Ports.Count;i++)
@@ -3274,7 +3495,13 @@ namespace UIOperateInterleaverFinalTest
             }
             string errMsg = "";
             CalPortRes(scanDetailInfo.Ports,ref errMsg);
-            CalBPParamRes(ref errMsg);
+            if (errMsg.Length > 0)
+                CommonFunction.WriteLog(string.Format("[ScanCalDiag] CalPortRes err={0}", errMsg));
+            string bpErr = "";
+            CalBPParamRes(ref bpErr);
+            if (bpErr.Length > 0)
+                CommonFunction.WriteLog(string.Format("[ScanCalDiag] CalBPParamRes err={0}", bpErr));
+            CommonFunction.WriteLog("[ScanCalDiag] CalAllResultInThread end");
         }
 
         [MethodImpl(MethodImplOptions.Synchronized)]
@@ -4086,6 +4313,16 @@ namespace UIOperateInterleaverFinalTest
                 {
                     bAllRef = false;
                     errMsg = "未归零，请先归零！";
+                    InterleaverScanResult.LogScanCalClassify("IsScanRef", errMsg, false, false);
+                    break;
+                }
+                int dataIndex = (portAssistant[i].ProductIndex - 1) * portAndNameDic.Count + portAssistant[i].PortIndex - 1;
+                if (dataIndex < 0 || dataIndex >= portPDLRef.Count
+                    || !InterleaverScanResult.HasValidRefBuffer(portPDLRef[dataIndex]))
+                {
+                    bAllRef = false;
+                    errMsg = "归零内存丢失，请重新系统归零。";
+                    InterleaverScanResult.LogScanCalClassify("IsScanRef", errMsg, true, false);
                     break;
                 }
             }
@@ -4426,18 +4663,8 @@ namespace UIOperateInterleaverFinalTest
 
                 foreach (string localPath in copiedLocalPaths)
                 {
-                    try
-                    {
-                        if (File.Exists(localPath))
-                        {
-                            File.Delete(localPath);
-                            CommonFunction.WriteLog("[Upload] deleted local CSV: " + localPath);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        CommonFunction.WriteLog("[Upload] delete local CSV warning: " + localPath + " " + ex.Message);
-                    }
+                    if (File.Exists(localPath))
+                        CommonFunction.WriteLog("[Upload] keep local CSV: " + localPath);
                 }
 
                 CommonFunction.WriteLog("[Upload] product success SN=" + sn);
