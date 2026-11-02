@@ -88,6 +88,24 @@ namespace UIOperateInterleaverFinalTest
 
         private const int TCC_GUID = 1;
 
+        /// <summary>烤后读温对比容差（°C）；仅告警用，不阻断开扫</summary>
+        private const double TccBakeReadyToleranceCelsius = 2.0;
+
+        /// <summary>烤温中轻量心跳读温间隔（毫秒）</summary>
+        private const int TccBakeHeartbeatIntervalMs = 60000;
+
+        /// <summary>烤后尽力读温最大轮询次数（每次含 UDLTccCtrl 内部重试）</summary>
+        private const int TccBakePostGateMaxAttempts = 3;
+
+        /// <summary>烤后读温轮询间隔（毫秒）</summary>
+        private const int TccBakePostGatePollMs = 20000;
+
+        /// <summary>心跳连续失败几次后告警（不杀流程）</summary>
+        private const int TccBakeHeartbeatFailWarnCount = 3;
+
+        /// <summary>本次烤温是否由一键测试启动</summary>
+        private bool bakeStartedAsOnekey = false;
+
         /// <summary>TAS 打开模板 STA 线程最长等待（毫秒）</summary>
         private const int OpenTemplateStaTimeoutMs = 180000;
 
@@ -588,45 +606,317 @@ namespace UIOperateInterleaverFinalTest
         private void BakeTimeCheck_DoWork(object sender, DoWorkEventArgs e)
         {
             curBakeStatus = BakeStatus.Baking;
-            double totalBakeTime = (double)e.Argument;
-            totalBakeTime = totalBakeTime * 1000;
-            int beginTick= System.Environment.TickCount;
+            double totalBakeSeconds = (double)e.Argument;
+            double totalBakeTimeMs = totalBakeSeconds * 1000;
+            double targetTmpt = curTestTmpt;
+            int beginTick = Environment.TickCount;
+            int nextHeartbeatTick = beginTick + TccBakeHeartbeatIntervalMs;
+            int heartbeatFailStreak = 0;
+            bool heartbeatWarnShown = false;
+            double firstHbTemp = 0;
+            bool hasFirstHbTemp = false;
+            double lastHbTemp = 0;
+            bool hasHbTemp = false;
+
             while (!bakeTimeCheckBK.CancellationPending)
             {
-                int preTickCount = System.Environment.TickCount;
-                int EndTickCount = System.Environment.TickCount;
-                if((EndTickCount-beginTick)> totalBakeTime)
+                int nowTick = Environment.TickCount;
+                int elapsed = unchecked(nowTick - beginTick);
+                if (elapsed > totalBakeTimeMs)
+                    break;
+
+                int remainMs = (int)Math.Max(0, totalBakeTimeMs - elapsed);
+                BakeProgressState tickState = new BakeProgressState
                 {
-                    curBakeStatus = BakeStatus.BakeComplete;
-                    bakeTimeCheckBK.ReportProgress(0);
-                    return;
+                    RemainingMs = remainMs,
+                    HasTemp = hasHbTemp,
+                    TempCelsius = lastHbTemp
+                };
+                bakeTimeCheckBK.ReportProgress(Math.Max(remainMs, 1), tickState);
+
+                if (unchecked(nowTick - nextHeartbeatTick) >= 0)
+                {
+                    nextHeartbeatTick = unchecked(nextHeartbeatTick + TccBakeHeartbeatIntervalMs);
+                    string hbMsg;
+                    double hbTemp;
+                    if (TryReadChamberTempForBake(out hbTemp, out hbMsg))
+                    {
+                        heartbeatFailStreak = 0;
+                        heartbeatWarnShown = false;
+                        if (!hasFirstHbTemp)
+                        {
+                            firstHbTemp = hbTemp;
+                            hasFirstHbTemp = true;
+                        }
+                        lastHbTemp = hbTemp;
+                        hasHbTemp = true;
+                        BakeProgressState hbState = new BakeProgressState
+                        {
+                            RemainingMs = remainMs,
+                            HasTemp = true,
+                            TempCelsius = hbTemp
+                        };
+                        bakeTimeCheckBK.ReportProgress(Math.Max(remainMs, 1), hbState);
+                        if (Math.Abs(hbTemp - targetTmpt) > 30)
+                        {
+                            CommonFunction.WriteLog(string.Format(
+                                "TCC bake heartbeat: temp {0:F1}°C far from target {1:F1}°C",
+                                hbTemp, targetTmpt));
+                        }
+                    }
+                    else
+                    {
+                        heartbeatFailStreak++;
+                        CommonFunction.WriteLog(string.Format(
+                            "TCC bake heartbeat read fail ({0}): {1}", heartbeatFailStreak, hbMsg));
+                        if (heartbeatFailStreak >= TccBakeHeartbeatFailWarnCount && !heartbeatWarnShown)
+                        {
+                            heartbeatWarnShown = true;
+                            CommonFunction.WriteLog(string.Format(
+                                "TCC bake heartbeat consecutive fail warn (UI suppressed): {0} times, {1}",
+                                heartbeatFailStreak, hbMsg));
+                        }
+                    }
                 }
-                while (EndTickCount - preTickCount < 1000)
+
+                int sliceStart = Environment.TickCount;
+                while (unchecked(Environment.TickCount - sliceStart) < 1000)
                 {
-                    EndTickCount = System.Environment.TickCount;
+                    if (bakeTimeCheckBK.CancellationPending)
+                        return;
                     Thread.Sleep(50);
                 }
-                double percent = totalBakeTime - (EndTickCount - beginTick);
-                bakeTimeCheckBK.ReportProgress(Convert.ToInt32(percent));
             }
+
+            if (bakeTimeCheckBK.CancellationPending)
+                return;
+
+            string advisoryMsg;
+            double gateTemp;
+            bool proceed = EvaluateChamberAfterBake(
+                targetTmpt,
+                hasFirstHbTemp, firstHbTemp,
+                hasHbTemp, lastHbTemp,
+                out gateTemp, out advisoryMsg);
+            if (!proceed)
+                return;
+
+            bool withinTol = !double.IsNaN(gateTemp)
+                && Math.Abs(gateTemp - targetTmpt) <= TccBakeReadyToleranceCelsius;
+            curBakeStatus = BakeStatus.BakeComplete;
+            bakeTimeCheckBK.ReportProgress(0, new BakeProgressState
+            {
+                RemainingMs = 0,
+                Complete = true,
+                GateOk = true,
+                TempWithinTolerance = withinTol,
+                HasTemp = !double.IsNaN(gateTemp),
+                TempCelsius = double.IsNaN(gateTemp) ? 0 : gateTemp,
+                Message = advisoryMsg
+            });
         }
 
         private void BakeTimeCheck_Progress(object sender, ProgressChangedEventArgs e)
         {
-            int time = e.ProgressPercentage;
-            time = time / 1000;
-            if(time==0)
+            BakeProgressState state = e.UserState as BakeProgressState;
+            // TCC 诊断/失败只写日志，不推操作员界面
+            if (state != null && !string.IsNullOrEmpty(state.WarningMessage))
+                CommonFunction.WriteLog("TCC bake progress (UI suppressed): " + state.WarningMessage);
+
+            if (state != null && state.Complete)
             {
                 curBakeStatus = BakeStatus.BakeComplete;
-                TemptRemainTime.Text = "烤温完成";
                 UIControl.IsClearSNVisiable = Visibility.Visible;
+                TemptRemainTime.Text = state.HasTemp
+                    ? string.Format("烤温完成 {0:F1}°C", state.TempCelsius)
+                    : "烤温完成";
+                if (!string.IsNullOrEmpty(state.Message))
+                    CommonFunction.WriteLog("TCC post-bake complete advisory: " + state.Message);
+                if (state.TempWithinTolerance && !string.IsNullOrEmpty(state.Message))
+                    RealtimeMsg(state.Message);
+                else
+                    RealtimeMsg("烤温计时结束，开始扫描。");
                 DoScanOnBK();
+                return;
+            }
+
+            int remainMs = state != null ? state.RemainingMs : e.ProgressPercentage;
+            int timeSec = Math.Max(0, remainMs / 1000);
+            string timeShow = string.Format("{0}:{1:D2}:{2:D2}", "00", timeSec / 60, timeSec % 60);
+            bool postGate = state != null && state.IsPostGateWait;
+            if (postGate)
+            {
+                if (state.HasTemp)
+                    TemptRemainTime.Text = string.Format("读温对比 {0}  {1:F1}°C", timeShow, state.TempCelsius);
+                else
+                    TemptRemainTime.Text = string.Format("读温对比 {0}", timeShow);
+            }
+            else if (state != null && state.HasTemp)
+                TemptRemainTime.Text = string.Format("{0}  {1:F1}°C", timeShow, state.TempCelsius);
+            else
+                TemptRemainTime.Text = timeShow;
+        }
+
+        /// <summary>
+        /// 烤温心跳/烤后读温（走 UDLTccCtrl 完整重试）。失败不抛。
+        /// </summary>
+        private bool TryReadChamberTempForBake(out double actual, out string errMsg)
+        {
+            actual = double.NaN;
+            errMsg = "";
+            IUDLTCC tccCtrl = null;
+            string getErr = "";
+            if (DeviceControl == null)
+            {
+                errMsg = "设备控制未初始化。";
+                return false;
+            }
+            DeviceControl.GetUDLTCCByGUID(TCC_GUID, ref tccCtrl, ref getErr);
+            if (tccCtrl == null)
+            {
+                errMsg = string.IsNullOrEmpty(getErr) ? "循环箱未连接。" : getErr;
+                return false;
+            }
+            return tccCtrl.GetCurrentTemp(out actual, ref errMsg) == 0;
+        }
+
+        /// <summary>
+        /// 烤温满时长后尽力读温对比；未到温或读失败仅告警。除取消外一律允许开扫。
+        /// </summary>
+        /// <returns>false 仅表示烤温已取消；true 表示应继续开扫</returns>
+        private bool EvaluateChamberAfterBake(
+            double targetTmpt,
+            bool hasFirstHbTemp, double firstHbTemp,
+            bool hasLastHbTemp, double lastHbTemp,
+            out double lastTemp, out string advisoryMsg)
+        {
+            lastTemp = double.NaN;
+            advisoryMsg = "";
+
+            for (int attempt = 1; attempt <= TccBakePostGateMaxAttempts; attempt++)
+            {
+                if (bakeTimeCheckBK.CancellationPending)
+                {
+                    advisoryMsg = "烤温已取消。";
+                    return false;
+                }
+
+                string readErr;
+                double actual;
+                if (TryReadChamberTempForBake(out actual, out readErr))
+                {
+                    lastTemp = actual;
+                    bakeTimeCheckBK.ReportProgress(1, new BakeProgressState
+                    {
+                        RemainingMs = Math.Max(0, (TccBakePostGateMaxAttempts - attempt) * TccBakePostGatePollMs),
+                        HasTemp = true,
+                        TempCelsius = actual,
+                        IsPostGateWait = true,
+                        WarningMessage = attempt == 1
+                            ? string.Format("烤温计时结束，开扫前读温对比目标 {0:F1}°C（实测 {1:F1}°C）", targetTmpt, actual)
+                            : null
+                    });
+
+                    if (Math.Abs(actual - targetTmpt) <= TccBakeReadyToleranceCelsius)
+                    {
+                        advisoryMsg = string.Format(
+                            "烤温到温对比通过，目标 {0:F1}°C，实测 {1:F1}°C，开始扫描。",
+                            targetTmpt, actual);
+                        CommonFunction.WriteLog("TCC post-bake compare OK: " + advisoryMsg);
+                        return true;
+                    }
+
+                    CommonFunction.WriteLog(string.Format(
+                        "TCC post-bake compare off-target attempt={0}/{1}: actual={2:F1} target={3:F1}",
+                        attempt, TccBakePostGateMaxAttempts, actual, targetTmpt));
+                }
+                else
+                {
+                    CommonFunction.WriteLog(string.Format(
+                        "TCC post-bake read fail attempt={0}/{1}: {2}",
+                        attempt, TccBakePostGateMaxAttempts, readErr));
+                    if (attempt == 1)
+                    {
+                        bakeTimeCheckBK.ReportProgress(1, new BakeProgressState
+                        {
+                            RemainingMs = Math.Max(0, (TccBakePostGateMaxAttempts - attempt) * TccBakePostGatePollMs),
+                            IsPostGateWait = true
+                        });
+                    }
+                }
+
+                if (attempt >= TccBakePostGateMaxAttempts)
+                    break;
+
+                int slept = 0;
+                while (slept < TccBakePostGatePollMs)
+                {
+                    if (bakeTimeCheckBK.CancellationPending)
+                    {
+                        advisoryMsg = "烤温已取消。";
+                        return false;
+                    }
+                    int step = Math.Min(200, TccBakePostGatePollMs - slept);
+                    Thread.Sleep(step);
+                    slept += step;
+                }
+            }
+
+            if (!double.IsNaN(lastTemp))
+            {
+                advisoryMsg = string.Format(
+                    "烤温结束未到温（目标 {0:F1}°C，实测 {1:F1}°C，允许 ±{2:F1}°C），仍开扫。",
+                    targetTmpt, lastTemp, TccBakeReadyToleranceCelsius);
             }
             else
-            {               
-                string timeShow = string.Format("{0}:{1:D2}:{2:D2}", "00",Convert.ToInt32(time/60),time%60);
-                TemptRemainTime.Text = timeShow;
+            {
+                advisoryMsg = BuildPostBakeTrendAdvisory(
+                    targetTmpt, hasFirstHbTemp, firstHbTemp, hasLastHbTemp, lastHbTemp);
             }
+            CommonFunction.WriteLog("TCC post-bake proceed anyway: " + advisoryMsg);
+            return true;
+        }
+
+        private static string BuildPostBakeTrendAdvisory(
+            double targetTmpt,
+            bool hasFirstHbTemp, double firstHbTemp,
+            bool hasLastHbTemp, double lastHbTemp)
+        {
+            if (hasFirstHbTemp && hasLastHbTemp)
+            {
+                bool heatingToward = targetTmpt > firstHbTemp && lastHbTemp > firstHbTemp;
+                bool coolingToward = targetTmpt < firstHbTemp && lastHbTemp < firstHbTemp;
+                if (heatingToward || coolingToward)
+                {
+                    return string.Format(
+                        "烤温结束读温失败，按升降温趋势（{0:F1}→{1:F1}°C，目标 {2:F1}°C）判定可开扫。",
+                        firstHbTemp, lastHbTemp, targetTmpt);
+                }
+                return string.Format(
+                    "烤温结束读温失败，心跳温度 {0:F1}→{1:F1}°C（目标 {2:F1}°C），按烤温时长满仍开扫。",
+                    firstHbTemp, lastHbTemp, targetTmpt);
+            }
+            if (hasLastHbTemp)
+            {
+                return string.Format(
+                    "烤温结束读温失败，末次心跳 {0:F1}°C（目标 {1:F1}°C），按烤温时长满仍开扫。",
+                    lastHbTemp, targetTmpt);
+            }
+            return string.Format(
+                "烤温结束读温失败，目标 {0:F1}°C，按烤温时长满仍开扫。", targetTmpt);
+        }
+
+        private sealed class BakeProgressState
+        {
+            public int RemainingMs;
+            public bool HasTemp;
+            public double TempCelsius;
+            public bool Complete;
+            public bool GateOk;
+            public bool TempWithinTolerance;
+            public bool IsPostGateWait;
+            public string Message;
+            public string WarningMessage;
         }
 
         /// <summary>
@@ -3830,11 +4120,24 @@ namespace UIOperateInterleaverFinalTest
             //判断是否需要烤温
             bool isNeedHeat = false;
 
+            // 同温已确立：后续产品/续测不再打 GetCurrentTemp
+            if (curTestTmpt.CompareTo(scanTmpt) == 0
+                && curTestTmpt.CompareTo(-300) != 0
+                && curTestTmpt.CompareTo(-1) != 0)
+            {
+                RealtimeMsg(string.Format("同温 {0}°C 已确认，跳过循环箱读温，直接扫描", scanTmpt));
+                CommonFunction.WriteLog(string.Format(
+                    "TCC skip GetCurrentTemp (same temp already confirmed): {0}°C", scanTmpt));
+                DoScanOnBK();
+                return true;
+            }
+
             IUDLTCC tccCtrl = null;
             DeviceControl.GetUDLTCCByGUID(TCC_GUID, ref tccCtrl, ref errMsg);
             if (tccCtrl == null)
             {
-                RealtimeMsg(string.Format("循环箱未连接"));
+                CommonFunction.WriteLog(string.Format(
+                    "TCC not connected when PrepareChamberAndScan (UI suppressed): {0}", errMsg));
                 if (curTestTmpt.CompareTo(-300) == 0)
                 {
                     if (scanTmpt > 20 && curTestTmpt < 30)
@@ -3856,7 +4159,8 @@ namespace UIOperateInterleaverFinalTest
                 int nTccRes = tccCtrl.GetCurrentTemp(out dTccTemp, ref errMsg);
                 if (nTccRes != 0)
                 {
-                    RealtimeMsg(string.Format("读取循环箱温度失败:{0}", errMsg));
+                    CommonFunction.WriteLog(string.Format(
+                        "TCC GetCurrentTemp fail in PrepareChamberAndScan (UI suppressed): {0}", errMsg));
                     EndOnekeyOnChamberFail(isOnekey);
                     return false;
                 }
@@ -3877,21 +4181,28 @@ namespace UIOperateInterleaverFinalTest
 
             if (tccCtrl == null)
             {
-                RealtimeMsg(string.Format("循环箱未连接，请先连接循环箱！"));
+                CommonFunction.WriteLog(
+                    "TCC not connected, cannot bake (UI suppressed): please connect chamber.");
                 EndOnekeyOnChamberFail(isOnekey);
                 return false;
             }
 
-            RealtimeMsg(string.Format("开始进行{0}度烤温（设温由 UDLTccCtrl 稳定重试）", scanTmpt));
+            RealtimeMsg(string.Format("开始进行{0}度烤温", scanTmpt));
+            CommonFunction.WriteLog(string.Format(
+                "TCC bake start target={0:F1}°C (post-bake compare ±{1:F0}°C, never block scan)",
+                scanTmpt, TccBakeReadyToleranceCelsius));
             int nSetRes = tccCtrl.SetTempSetpoint(scanTmpt, ref errMsg);
             if (nSetRes != 0)
             {
-                RealtimeMsg(string.Format("循环箱设置温度失败:{0},{1}", scanTmpt, errMsg));
+                CommonFunction.WriteLog(string.Format(
+                    "TCC SetTempSetpoint fail (UI suppressed): target={0}, {1}", scanTmpt, errMsg));
                 EndOnekeyOnChamberFail(isOnekey);
                 return false;
             }
-            bakeTimeCheckBK.RunWorkerAsync(tmptChangeTimes * 60);
+            // 先记下目标温与一键标记，再启动烤温线程（供心跳/门禁使用）
+            bakeStartedAsOnekey = isOnekey;
             curTestTmpt = scanTmpt;
+            bakeTimeCheckBK.RunWorkerAsync(tmptChangeTimes * 60);
             return true;
         }
 
