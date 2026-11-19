@@ -1,0 +1,1 @@
+<?xml version="1.0" encoding="gb2312"?><Stations><Productline name="Interleaver"><Stationtype name="ITL_ATS" TemplateType="Manual1830" TestProcess="Adjust" Automation="0" Goldsample="ITLTEST002" MainDll="module/UIOperateInterleaver.dll"/></Productline></Stations>

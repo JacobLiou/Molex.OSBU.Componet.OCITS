@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="gb2312"?>
+<Config>
+	<DeviceConfig name="功率计">
+		<Device name="嘉惠">
+			<Type>JH</Type>
+			<channel>2</channel>
+			<check>D?</check>
+			<control0 name="COM"></control0>
+			<control1 name="波特率"></control1>
+		</Device>
+		<Device name="1830">
+			<Type>1830</Type>
+			<channel>1</channel>
+			<check>D?</check>
+			<control0 name="COM"></control0>
+			<control1 name="波特率"></control1>
+		</Device>
+		<Device name="8163A">
+			<Type>8163A</Type>
+			<channel>1</channel>
+		</Device>
+	</DeviceConfig>
+	<DeviceConfig name="光源">
+		<Device name="8164">
+			<!--自动读取波长范围？-->
+			<Type>8164</Type>
+			<control0 name="GPIB"></control0>
+		</Device>
+		<Device name="集成光源">
+			<Type>SourceBank</Type>
+			<control0 name="ServerAddress"></control0>
+			<control1 name="Port"></control1>
+			<control2 name="ClientID"></control2>
+		</Device>
+	</DeviceConfig>
+	<DeviceConfig name="光源盒">
+		<Device name="ecoAdjust2-1">
+			<!--自动读取波长范围？-->
+			<Type>Min1X8Swtich</Type>
+			<control0 name="COM"></control0>
+			<control1 name="波特率"></control1>
+		</Device>
+		<Device name="ecoAdjust2-2">
+			<Type>Min1X8Swtich</Type>
+			<control0 name="COM"></control0>
+			<control1 name="波特率"></control1>
+		</Device>
+		<Device name="1*8switchTest">
+			<!--自动读取波长范围？-->
+			<Type>PboxSwtich</Type>
+			<control0 name="COM"></control0>
+			<control1 name="波特率"></control1>
+		</Device>
+		<Device name="1:8switchMultimeterTest">
+			<Type>PboxSwtich</Type>
+			<control0 name="COM"></control0>
+			<control1 name="波特率"></control1>
+		</Device>
+    <Device name="InterleaverSwitch">
+      <Type>InterleaverSwitch</Type>
+      <control0 name="COM"></control0>
+      <control1 name="波特率"></control1>
+    </Device>
+    <Device name="DemuxSwitch">
+      <Type>InterleaverSwitch</Type>
+      <control0 name="COM"></control0>
+      <control1 name="波特率"></control1>
+    </Device>
+	</DeviceConfig>
+  <DeviceConfig name="Interleaver服务器">
+    <Device name="Interleaver">
+      <!--自动读取波长范围？-->
+      <Type>Interleaver</Type>
+      <control0 name="服务器地址"></control0>
+      <control1 name="光源ID"></control1>
+      <control2 name="功率计（n1;n2）"></control2>
+    </Device>
+  </DeviceConfig>
+</Config>

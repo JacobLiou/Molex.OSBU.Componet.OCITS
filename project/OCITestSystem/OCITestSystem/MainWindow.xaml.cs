@@ -324,10 +324,25 @@ namespace OCITestSystem
             "InterleaverAlgorithm.dll",
         };
 
+        /// <summary>
+        /// 与宿主共用的依赖程序集：禁止再 Load 出第二份，否则 MEF 契约 TypeIdentity 分裂
+        /// （典型症状：IDeviceHandle / IInterleaverAlgorithm 同时「未找到匹配导出」）。
+        /// </summary>
+        private static readonly HashSet<string> SharedDependencyAssemblyFiles =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "MolexUtility.dll",
+                "ProtocolAggregator.dll",
+                "MenuPluginInterface.dll",
+            };
+
         private static bool assemblyResolveRegistered;
         private static string probeExeDir = "";
         private static string probeModuleDir = "";
         private static string probeModuleCacheDir = "";
+        private static readonly object AssemblyLoadGate = new object();
+        private static readonly Dictionary<string, Assembly> AssembliesBySimpleName =
+            new Dictionary<string, Assembly>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// 写入 compose 专用日志（不依赖 Environment.CurrentDirectory；网络盘 Log 写失败时回退到 %TEMP%）。
@@ -357,7 +372,49 @@ namespace OCITestSystem
         }
 
         /// <summary>
-        /// 将 module\ 下 DLL 同步到本机临时目录，避免网络盘 LoadFrom/Load 触发 0x80131515。
+        /// 按简单名查找 AppDomain 中已加载程序集（忽略动态/反射上下文异常）。
+        /// </summary>
+        private static Assembly FindLoadedAssembly(string simpleName)
+        {
+            if (string.IsNullOrEmpty(simpleName))
+                return null;
+
+            Assembly cached;
+            lock (AssemblyLoadGate)
+            {
+                if (AssembliesBySimpleName.TryGetValue(simpleName, out cached) && cached != null)
+                    return cached;
+            }
+
+            foreach (Assembly asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    if (string.Equals(asm.GetName().Name, simpleName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        RememberLoadedAssembly(simpleName, asm);
+                        return asm;
+                    }
+                }
+                catch
+                {
+                }
+            }
+            return null;
+        }
+
+        private static void RememberLoadedAssembly(string simpleName, Assembly asm)
+        {
+            if (string.IsNullOrEmpty(simpleName) || asm == null)
+                return;
+            lock (AssemblyLoadGate)
+            {
+                AssembliesBySimpleName[simpleName] = asm;
+            }
+        }
+
+        /// <summary>
+        /// 将 module\ 下 DLL 同步到本机临时目录，避免网络盘 LoadFrom 触发 0x80131515。
         /// </summary>
         private static string SyncModuleDllCache(string moduleDir)
         {
@@ -366,22 +423,85 @@ namespace OCITestSystem
             foreach (string src in Directory.GetFiles(moduleDir, "*.dll"))
             {
                 string dest = Path.Combine(cacheDir, Path.GetFileName(src));
-                File.Copy(src, dest, true);
+                try
+                {
+                    File.Copy(src, dest, true);
+                }
+                catch
+                {
+                    // 单文件拷贝失败不阻断；后续可回退直接读 module\
+                }
             }
             return cacheDir;
         }
 
         /// <summary>
-        /// 从本地缓存或文件加载程序集（优先 module 缓存目录）。
+        /// 加载程序集：同名只保留一份。优先 LoadFrom（带 Location，利于依赖绑定）；
+        /// 失败再 Load(byte[])。绝不能对 MolexUtility 等依赖每次新建身份。
         /// </summary>
         private static Assembly LoadAssemblyFromFile(string path)
         {
-            byte[] raw = File.ReadAllBytes(path);
-            return Assembly.Load(raw);
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                throw new FileNotFoundException("程序集文件不存在", path);
+
+            string simpleName = Path.GetFileNameWithoutExtension(path);
+            Assembly existing = FindLoadedAssembly(simpleName);
+            if (existing != null)
+                return existing;
+
+            lock (AssemblyLoadGate)
+            {
+                if (AssembliesBySimpleName.TryGetValue(simpleName, out existing) && existing != null)
+                    return existing;
+
+                Assembly asm = null;
+                Exception loadFromError = null;
+                try
+                {
+                    // 本地缓存路径用 LoadFrom，保持单一身份且带 Location
+                    asm = Assembly.LoadFrom(path);
+                }
+                catch (Exception ex)
+                {
+                    loadFromError = ex;
+                }
+
+                if (asm == null)
+                {
+                    try
+                    {
+                        byte[] raw = File.ReadAllBytes(path);
+                        asm = Assembly.Load(raw);
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new FileLoadException(
+                            "无法加载程序集: " + path +
+                            (loadFromError != null ? "；LoadFrom: " + loadFromError.Message : ""),
+                            ex);
+                    }
+                }
+
+                AssembliesBySimpleName[simpleName] = asm;
+                return asm;
+            }
         }
 
         private Assembly LoadPluginAssembly(string moduleDir, string dllFileName)
         {
+            // 共享依赖：强制使用 exe 根已加载/可加载的那一份，避免 module 副本造成 MEF 分裂
+            if (SharedDependencyAssemblyFiles.Contains(dllFileName))
+            {
+                string simple = Path.GetFileNameWithoutExtension(dllFileName);
+                Assembly shared = FindLoadedAssembly(simple);
+                if (shared != null)
+                    return shared;
+
+                string exeDep = Path.Combine(probeExeDir, dllFileName);
+                if (File.Exists(exeDep))
+                    return LoadAssemblyFromFile(exeDep);
+            }
+
             string cachePath = Path.Combine(probeModuleCacheDir, dllFileName);
             if (File.Exists(cachePath))
                 return LoadAssemblyFromFile(cachePath);
@@ -398,11 +518,11 @@ namespace OCITestSystem
         /// </summary>
         private static void EnsureModuleAssemblyProbe(string exeDir, string moduleDir, string moduleCacheDir)
         {
-            if (assemblyResolveRegistered)
-                return;
             probeExeDir = exeDir ?? "";
             probeModuleDir = moduleDir ?? "";
             probeModuleCacheDir = moduleCacheDir ?? "";
+            if (assemblyResolveRegistered)
+                return;
             AppDomain.CurrentDomain.AssemblyResolve += ModuleAssemblyResolve;
             assemblyResolveRegistered = true;
         }
@@ -415,7 +535,17 @@ namespace OCITestSystem
                 if (string.IsNullOrEmpty(simpleName))
                     return null;
 
-                string[] dirs = { probeExeDir, probeModuleCacheDir, probeModuleDir };
+                // 关键：复用已加载程序集，杜绝 MolexUtility 等被 Load 出第二份
+                Assembly existing = FindLoadedAssembly(simpleName);
+                if (existing != null)
+                    return existing;
+
+                // 共享依赖优先 exe 根目录
+                bool shared = SharedDependencyAssemblyFiles.Contains(simpleName + ".dll");
+                string[] dirs = shared
+                    ? new[] { probeExeDir, probeModuleCacheDir, probeModuleDir }
+                    : new[] { probeExeDir, probeModuleCacheDir, probeModuleDir };
+
                 foreach (string dir in dirs)
                 {
                     if (string.IsNullOrEmpty(dir))
@@ -430,6 +560,42 @@ namespace OCITestSystem
             {
             }
             return null;
+        }
+
+        /// <summary>
+        /// 预登记宿主已引用的共享程序集，保证后续插件 Import/Export 使用同一 TypeIdentity。
+        /// </summary>
+        private void PreloadSharedDependencyAssemblies(string exeDir)
+        {
+            try
+            {
+                RememberLoadedAssembly("ProtocolAggregator", typeof(EventAggregator).Assembly);
+                RememberLoadedAssembly("MolexUtility", typeof(CommonFunction).Assembly);
+                RememberLoadedAssembly("MenuPluginInterface", typeof(IMenuPlugin).Assembly);
+            }
+            catch (Exception ex)
+            {
+                WriteComposeLog("[Compose] PreloadShared(type) warn: " + ex.Message);
+            }
+
+            foreach (string dllName in SharedDependencyAssemblyFiles)
+            {
+                string simple = Path.GetFileNameWithoutExtension(dllName);
+                if (FindLoadedAssembly(simple) != null)
+                    continue;
+                string path = Path.Combine(exeDir, dllName);
+                if (!File.Exists(path))
+                    continue;
+                try
+                {
+                    LoadAssemblyFromFile(path);
+                    WriteComposeLog("[Compose] preload shared: " + dllName);
+                }
+                catch (Exception ex)
+                {
+                    WriteComposeLog("[Compose] preload shared fail " + dllName + ": " + ex.Message);
+                }
+            }
         }
 
         /// <summary>
@@ -461,11 +627,16 @@ namespace OCITestSystem
             }
 
             foreach (string dllName in dllNames.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
+            {
+                // 共享依赖只作绑定，不作为独立插件 Catalog（ProtocolAggregator 已由宿主 AssemblyCatalog 加入）
+                if (SharedDependencyAssemblyFiles.Contains(dllName))
+                    continue;
                 yield return dllName;
+            }
         }
 
         /// <summary>
-        /// 仅组合 library 插件 DLL；依赖项（ADODB 等）通过 AssemblyResolve 从 module\ 加载，不扫描全部 *.dll。
+        /// 仅组合 library 插件 DLL；依赖项通过 AssemblyResolve 解析，且同名程序集全局唯一。
         /// </summary>
         private void Compose()
         {
@@ -486,10 +657,11 @@ namespace OCITestSystem
                 WriteComposeLog("[Compose] module cache: " + moduleCacheDir);
 
                 EnsureModuleAssemblyProbe(exeDir, moduleDir, moduleCacheDir);
+                PreloadSharedDependencyAssemblies(exeDir);
 
                 var catalog = new AggregateCatalog();
                 catalog.Catalogs.Add(new AssemblyCatalog(typeof(EventAggregator).Assembly));
-                WriteComposeLog("[Compose] catalog add ProtocolAggregator (exe root)");
+                WriteComposeLog("[Compose] catalog add ProtocolAggregator (exe root, single)");
 
                 foreach (string dllName in CollectModulePluginDllNames(moduleDir))
                 {
@@ -504,6 +676,25 @@ namespace OCITestSystem
                     WriteComposeLog("[Compose] catalog add: " + dllName);
                     Assembly pluginAsm = LoadPluginAssembly(moduleDir, dllName);
                     catalog.Catalogs.Add(new AssemblyCatalog(pluginAsm));
+                }
+
+                // 诊断：确认关键契约导出是否可见（便于网络盘联调）
+                try
+                {
+                    using (var probe = new CompositionContainer(catalog))
+                    {
+                        int deviceExports = probe.GetExports<IDeviceHandle>().Count();
+                        int algoExports = probe.GetExports<MolexUtility.Algorithm.IInterleaverAlgorithm>().Count();
+                        WriteComposeLog(string.Format(
+                            "[Compose] export probe IDeviceHandle={0} IInterleaverAlgorithm={1} MolexUtility={2}",
+                            deviceExports,
+                            algoExports,
+                            typeof(CommonFunction).Assembly.FullName));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    WriteComposeLog("[Compose] export probe warn: " + ex.Message);
                 }
 
                 container = new CompositionContainer(catalog);

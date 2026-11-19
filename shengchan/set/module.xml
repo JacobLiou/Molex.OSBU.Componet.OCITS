@@ -1,0 +1,23 @@
+<Grid>
+	<Grid.RowDefinitions>	
+		<RowDefinition Height="*"/>	
+		
+		<RowDefinition Height="140"/>
+		
+		<RowDefinition Height="90*"/>
+	</Grid.RowDefinitions>
+	<Grid.ColumnDefinitions>
+		<ColumnDefinition Width="180"/>
+		
+		<ColumnDefinition Width="95*"/>
+		
+		<ColumnDefinition Width="30*"/>
+		
+		<ColumnDefinition Width="42*"/>
+	</Grid.ColumnDefinitions>	
+	
+	<DockPanel Grid.Row="1" Grid.ColumnSpan="4" Module="UIOperate1X8" Margin="2"/>
+	
+	<DockPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="4" Module="UIListMultiParam" Margin="2"/>
+	
+</Grid>

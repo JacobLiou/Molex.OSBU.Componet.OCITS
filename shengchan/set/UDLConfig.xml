@@ -1,0 +1,12 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<MIMSUDL language="en" APP="" CRC="F2B5B1C2">
+  <Property DevTypeCount="1" Date="2024/7/11" RDS="0" User="30969">
+    <DevType Type="FSTP">
+      <Device DevID="1" Combo="0" Online="1" DevKey1="0" DevKey2="NA" DevKey3="NA" DevKey4="NA" DevKey5="NA">
+        <Info MainFrame="FSTP-1XXX" Model="FSTP-100X" />
+        <Comm ComType="LAN" ComKey1="0" ComKey2="172.16.142.29" ComKey3="9991" ComKey4="NA" ComKey5="NA" />
+        <Mapping GUID="2" Name="FSTP-PDL" Slot="0" Channel="1" Model="FSTP-100A-SB" />
+      </Device>
+    </DevType>
+  </Property>
+</MIMSUDL>

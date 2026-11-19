@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="gb2312"?>
+<Config>
+	<DeviceConfig name="功率计">
+		<Device name="嘉惠">
+			<Type>JH</Type>
+			<channel>2</channel>
+			<check>D?</check>
+			<control0 name="COM"></control0>
+			<control1 name="波特率"></control1>
+		</Device>
+		<Device name="1830">
+			<Type>1830</Type>
+			<channel>1</channel>
+			<check>D?</check>
+			<control0 name="COM"></control0>
+			<control1 name="波特率"></control1>
+		</Device>
+		<Device name="自制1830">
+			<Type>Oplink1830</Type>
+			<channel>1</channel>
+			<check>D?</check>
+			<control0 name="COM"></control0>
+			<control1 name="波特率"></control1>
+		</Device>
+	</DeviceConfig>
+	<DeviceConfig name="光源">
+		<Device name="8164">
+			<Type>8164</Type>
+			<control0 name="GPIB"></control0>
+		</Device>
+		<Device name="集成光源">
+			<Type>SourceBank</Type>
+			<control0 name="ServerAddress"></control0>
+			<control1 name="Port"></control1>
+			<control2 name="ClientID"></control2>
+		</Device>
+	</DeviceConfig>
+  <DeviceConfig name="光源盒">
+    <Device name="InterleaverSwitch">
+      <Type>OMSSwitch</Type>
+      <control0 name="COM"></control0>
+      <control1 name="波特率"></control1>
+    </Device>
+    <Device name="InterleaverSwitch-8plus">
+      <Type>OMSSwitch</Type>
+      <control0 name="COM"></control0>
+      <control1 name="波特率"></control1>
+    </Device>
+    <Device name="InterleaverFinalTestSwitch">
+      <Type>OMSSwitch</Type>
+      <control0 name="COM"></control0>
+      <control1 name="波特率"></control1>
+    </Device>
+    <Device name="InterleaverFinalTestMsPlus">
+      <Type>OMSSwitch</Type>
+      <control0 name="COM"></control0>
+      <control1 name="波特率"></control1>
+    </Device>
+    <Device name="DemuxSwitch">
+      <Type>OMSSwitch</Type>
+      <control0 name="COM"></control0>
+      <control1 name="波特率"></control1>
+    </Device>
+    <Device name="UDLSwitch">
+      <Type>UDLSwitch</Type>
+      <control0 name="GUID"></control0>
+    </Device>    
+  </DeviceConfig>
+  <DeviceConfig name="Interleaver服务器">
+    <Device name="Interleaver">
+      <!--自动读取波长范围？-->
+      <Type>Interleaver</Type>
+      <control0 name="服务器地址"></control0>
+      <control1 name="光源ID"></control1>
+      <control2 name="功率计（n1;n2）"></control2>
+    </Device>
+    <Device name="NewFSTPScan">
+      <!--自动读取波长范围？-->
+      <Type>NEWFSTPScan</Type>
+      <control0 name="功率计（n1;n2）"></control0>
+      <control1 name="IL/PDL(1-IL/2-PDL)"></control1>
+    </Device>
+    <Device name="UDLFSTP">
+      <Type>UDLFSTP</Type>
+      <control0 name="GUID(1-IL/2-PDL)"></control0>
+      <control1 name="功率计（n1;n2）"></control1>
+    </Device>
+  </DeviceConfig>
+  <DeviceConfig name="自动化服务器">
+    <Device name="自动化服务器">
+      <Type>Automation</Type>
+      <control0 name="服务器IP"></control0>
+      <control1 name="端口号"></control1>
+    </Device>
+  </DeviceConfig>
+  <DeviceConfig name="循环箱">
+    <Device name="循环箱">
+      <Type>UDLTCC</Type>
+      <control0 name="GUID"></control0>
+    </Device>
+  </DeviceConfig>
+</Config>

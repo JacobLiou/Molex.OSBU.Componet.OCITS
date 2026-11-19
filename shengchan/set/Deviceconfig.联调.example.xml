@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="gb2312"?>
+<!-- ITL_ATS 自动化调节：硬件同生产 shengchan；另加 Automation 联调。请用 GB2312 保存。 -->
+<Config>
+  <DeviceConfig name="功率计">
+    <Device name="嘉惠">
+      <Type>JH</Type>
+      <channel>2</channel>
+      <control0 name="COM">COM5</control0>
+      <control1 name="波特率">9600</control1>
+    </Device>
+  </DeviceConfig>
+  <DeviceConfig name="光源盒">
+    <Device name="InterleaverSwitch">
+      <Type>OMSSwitch</Type>
+      <control0 name="COM">COM6</control0>
+      <control1 name="波特率">115200</control1>
+    </Device>
+  </DeviceConfig>
+  <DeviceConfig name="Interleaver服务器">
+    <Device name="UDLFSTP">
+      <Type>UDLFSTP</Type>
+      <control0 name="GUID(1-IL/2-PDL)">2</control0>
+      <control1 name="功率计（n1;n2）">6;7</control1>
+    </Device>
+  </DeviceConfig>
+  <DeviceConfig name="自动化服务器">
+    <Device name="自动化服务器">
+      <Type>Automation</Type>
+      <control0 name="服务器IP">172.16.144.110</control0>
+      <control1 name="端口号">9100</control1>
+    </Device>
+  </DeviceConfig>
+</Config>
