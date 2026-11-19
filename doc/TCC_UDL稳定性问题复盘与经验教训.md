@@ -111,9 +111,10 @@
 | 新 UDL 版本产线验证：RT → 设 LT → 完整烤温 → 开扫前读温，多轮复现场景 | 本工位 | ☐ |
 | Release 说明中记录「程序版本 ↔ UDL 版本 ↔ UDLConfig.xml」对应关系 | 本工位 | ☐ |
 | （可选）烤温期间每 30–60s 心跳读温：显示温度、提前发现断线、做真正的 soak 判定 | 本工位 | ☐ |
-| （可选）UDL 调用锁上移到 `DeviceHandle`，由 TCC / FSTP / Switch 共用 | 本工位 | ☐ |
+| UDL 调用锁上移到 `DeviceHandle.UdlEngineLock`，TCC / FSTP / OSW 共用 | 本工位 | ☑ |
+| TCC 硬失败后应用侧 `TryReopenUdlEngine`（冷却 60s） | 本工位 | ☑ |
 | UDL 修复验证通过后，评估移除或关闭临时补偿逻辑（趋势判定、静默继续等） | 本工位 | ☐ |
-| USB 转串口电源管理检查（关闭选择性挂起） | 设备 / IT | ☐ |
+| USB 转串口电源管理检查（关闭选择性挂起） | 设备 / IT | ☐（步骤见 §8） |
 
 ---
 
@@ -127,5 +128,31 @@
 
 - 弹框截图：`bug.png`（仓库根目录）
 - 源码：`library/DeviceControl/DeviceControl/TCC/UDLTccCtrl.cs`、`library/DeviceControl/DeviceControl/DeviceHandle.cs`、`library/UIOperateInterleaverFinalTest/UIOperateInterleaverFinalTest/OperateInteleaverFinalTest.xaml.cs`
-- 日志：`{exe}\UDLlog.txt`、`{exe}\Log\yyyy-MM-ddlog.txt`
+- 日志：`{exe}\UDLlog.txt`、`{exe}\Log\yyyy-MM-ddlog.txt`；重连关键字 `[UdlReopen]`
 - 相关文档：[ITL_FTS_rt_only_no_tcc.md](ITL_FTS_rt_only_no_tcc.md)、[Project过程中的协作负面摩擦以及应对策略.md](Project过程中的协作负面摩擦以及应对策略.md)
+- USB 选择性挂起脚本示例：[disable_usb_selective_suspend.example.ps1](disable_usb_selective_suspend.example.ps1)
+
+---
+
+## 8. 工位机：关闭 USB 转串口「选择性挂起」
+
+主程序长空闲（烤温）后首次读温失败、关进程开小工具又正常时，除 UDL Engine 外，也应排除 USB 串口被系统挂起。
+
+### 8.1 设备管理器（必做）
+
+1. 打开「设备管理器」。
+2. 找到循环箱所用 **USB 串口**（或对应 USB 转串口芯片）及上级 **通用串行总线控制器 / USB Root Hub**。
+3. 右键 → 属性 → **电源管理** → **取消勾选**「允许计算机关闭此设备以节约电源」。
+4. 对相关 Hub / 串口设备逐个检查。
+
+### 8.2 电源方案：禁用 USB 选择性挂起
+
+1. 控制面板 → 电源选项 → 更改计划设置 → 更改高级电源设置。
+2. **USB 设置 → USB 选择性暂停设置 → 已禁用**（插电与用电池均禁用）。
+3. 或使用管理员 PowerShell 运行仓库示例：[`disable_usb_selective_suspend.example.ps1`](disable_usb_selective_suspend.example.ps1)（改当前活动电源方案；不由测试程序启动时自动执行）。
+
+### 8.3 验证
+
+- 主程序不退出，完成一次烤温空闲后再读/设温。
+- 对比日志是否仍出现 `0x00120091`；若仍有，看是否出现 `[UdlReopen]` 且重连后恢复。
+- **勿**与 `TccTempTest` 同时打开争用同一串口。

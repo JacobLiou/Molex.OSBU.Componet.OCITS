@@ -55,8 +55,9 @@
 
                 <Button Name="btnClearBakeSN" Visibility="{Binding IsClearSNVisiable}" Grid.Row="2"  Grid.Column="2" Content="清空列表" FontWeight="Black" FontSize="14"  Margin="5" DockPanel.Dock="Right" Click="btnClearBakeSN_Click"/>
                 <StackPanel Orientation="Vertical" Margin="7,7,7,0" Grid.Row="3" Grid.Column="2" Grid.RowSpan="2">
-                    <TextBlock Text="烤温倒计时:"  FontSize="14" VerticalAlignment="Bottom" HorizontalAlignment="Right"/>
-                    <TextBlock Name="TemptRemainTime" Text="00:00:00"  FontWeight="Black" FontSize="14" VerticalAlignment="Center" HorizontalAlignment="Right"/>
+                    <TextBlock Text="烤温倒计时:" FontSize="14" HorizontalAlignment="Right"/>
+                    <TextBlock Name="TemptRemainTime" Text="00:00:00" FontWeight="Black" FontSize="14" HorizontalAlignment="Right"/>
+                    <TextBlock Name="TemptRemainTemp" Text="" FontWeight="Black" FontSize="14" HorizontalAlignment="Right"/>
                 </StackPanel>
                 <ScrollViewer Grid.Row="1" Grid.RowSpan="6" Grid.Column="3" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
                     <ListView Name="listSNs" ItemsSource="{Binding}" FontSize="13" Margin="2" MinHeight="120" MaxHeight="420" HorizontalContentAlignment="Stretch">

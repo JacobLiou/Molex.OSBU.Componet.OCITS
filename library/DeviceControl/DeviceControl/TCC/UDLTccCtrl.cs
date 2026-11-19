@@ -8,13 +8,11 @@ namespace DeviceControl
 {
     /// <summary>
     /// UDL 循环箱控制。稳定性策略集中在此（探针 TccTempTest 结论）：
-    /// 单次读温约 0.9～1s；与 FSTP 共享 Engine 时必须串行；失败重试间隔须 ≥1s；优先在 UI/STA 线程调用。
+    /// 单次读温约 0.9～1s；与 FSTP 共享 Engine 时必须串行（DeviceHandle.UdlEngineLock）；
+    /// 失败重试间隔须 ≥1s；硬失败后可冷却重连 Engine；优先在 UI/STA 线程调用。
     /// </summary>
     public class UDLTccCtrl : IUDLTCC
     {
-        /// <summary>串行化 TCC UDL 调用，避免与 FSTP 等共享 Engine 时交错污染 LastError。</summary>
-        private static readonly object TccUdlLock = new object();
-
         /// <summary>产线验证：单次 GetCurrentTemp 约 1s，重试间隔过短无效。</summary>
         private const int MaxAttempts = 5;
         private const int RetryDelayMs = 1200;
@@ -38,9 +36,27 @@ namespace DeviceControl
             string localErr = "";
             int result = UdlUiSync.Send(() =>
             {
-                lock (TccUdlLock)
+                lock (DeviceHandle.UdlEngineLock)
                 {
-                    return GetCurrentTempCore(out localTemp, ref localErr);
+                    int r = GetCurrentTempCore(out localTemp, ref localErr);
+                    if (r != 0 && LooksLikeHardUdlFailure(localErr) && DeviceHandle.CanTryReopenUdlEngine())
+                    {
+                        string reopenErr = "";
+                        CommonFunction.WriteLog(
+                            "TCC GetCurrentTemp hard fail → TryReopenUdlEngine: " + localErr);
+                        if (DeviceHandle.TryReopenUdlEngine(ref reopenErr))
+                        {
+                            r = GetCurrentTempCore(out localTemp, ref localErr);
+                            CommonFunction.WriteLog(string.Format(
+                                "TCC GetCurrentTemp after reopen: res={0} err={1}", r, localErr));
+                        }
+                        else
+                        {
+                            CommonFunction.WriteLog(
+                                "TCC GetCurrentTemp reopen skipped/failed: " + reopenErr);
+                        }
+                    }
+                    return r;
                 }
             });
             getTempr = localTemp;
@@ -56,9 +72,27 @@ namespace DeviceControl
             string localErr = "";
             int result = UdlUiSync.Send(() =>
             {
-                lock (TccUdlLock)
+                lock (DeviceHandle.UdlEngineLock)
                 {
-                    return SetTempSetpointCore(setTempr, ref localErr);
+                    int r = SetTempSetpointCore(setTempr, ref localErr);
+                    if (r != 0 && LooksLikeHardUdlFailure(localErr) && DeviceHandle.CanTryReopenUdlEngine())
+                    {
+                        string reopenErr = "";
+                        CommonFunction.WriteLog(
+                            "TCC SetTempSetpoint hard fail → TryReopenUdlEngine: " + localErr);
+                        if (DeviceHandle.TryReopenUdlEngine(ref reopenErr))
+                        {
+                            r = SetTempSetpointCore(setTempr, ref localErr);
+                            CommonFunction.WriteLog(string.Format(
+                                "TCC SetTempSetpoint after reopen: res={0} err={1}", r, localErr));
+                        }
+                        else
+                        {
+                            CommonFunction.WriteLog(
+                                "TCC SetTempSetpoint reopen skipped/failed: " + reopenErr);
+                        }
+                    }
+                    return r;
                 }
             });
             errMsg = localErr ?? "";
@@ -216,6 +250,25 @@ namespace DeviceControl
             if (double.IsNaN(tempCelsius) || double.IsInfinity(tempCelsius))
                 return false;
             return tempCelsius >= PlausibleTempMinCelsius && tempCelsius <= PlausibleTempMaxCelsius;
+        }
+
+        /// <summary>通讯硬失败（含 0x00120091 / 通讯库 / COM 丢失），值得尝试 Engine 重连。</summary>
+        private static bool LooksLikeHardUdlFailure(string err)
+        {
+            if (string.IsNullOrEmpty(err))
+                return true;
+            string s = err;
+            if (s.IndexOf("0x00120091", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            if (s.IndexOf("通讯库", StringComparison.Ordinal) >= 0)
+                return true;
+            if (s.IndexOf("TCC object is null", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            if (s.IndexOf("UDL Engine is null", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            if (s.IndexOf("未获得有效温度", StringComparison.Ordinal) >= 0)
+                return true;
+            return false;
         }
     }
 }

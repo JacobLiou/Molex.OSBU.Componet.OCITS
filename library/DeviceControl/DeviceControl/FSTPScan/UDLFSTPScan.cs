@@ -35,6 +35,8 @@ namespace DeviceControl
         private string requestDatapath = "";
         public void ScanFun()
         {
+            lock (DeviceHandle.UdlEngineLock)
+            {
             if (DeviceHandle.fstpCtrl == null)
             {
                 requestErrMsg = "FSTP object is null.";
@@ -166,6 +168,7 @@ namespace DeviceControl
                 }
             }
             MolexUtility.CommonFunction.WriteLog("SCAN SUCCESS");
+            } // UdlEngineLock
         }
         public int InitFSTP(int guid,string pm)
         {
@@ -372,6 +375,8 @@ namespace DeviceControl
                 return 2;
             }
 
+            // 整段扫程持 UdlEngineLock：与 TCC 串行，避免共享 Engine LastError 交错
+            lock (DeviceHandle.UdlEngineLock)
             lock (SweepWaitLock)
             {
                 int setupRes = SetupScanParameters(dWLStart, dWLStop, dStep, ref errMsg);
@@ -512,11 +517,14 @@ namespace DeviceControl
         /// <returns>0--成功，1--失败</returns>
         public int GetSweepStatus(out int plSweepStatus, out int plEstWaitingTime, ref string errMsg)
         {
-            DeviceHandle.fstpCtrl.GetSweepStatus(deviceGUID,out plSweepStatus,out plEstWaitingTime);
-            DeviceHandle.GetUDLMessage(ref errMsg);
-            if (errMsg.Length > 0)
-                return 1;
-            return 0;
+            lock (DeviceHandle.UdlEngineLock)
+            {
+                DeviceHandle.fstpCtrl.GetSweepStatus(deviceGUID, out plSweepStatus, out plEstWaitingTime);
+                DeviceHandle.GetUDLMessage(ref errMsg);
+                if (errMsg.Length > 0)
+                    return 1;
+                return 0;
+            }
         }
 
         /// <summary>
@@ -532,11 +540,14 @@ namespace DeviceControl
         /// <returns>0--成功，1--出错</returns>
         public int GetMeasureResult(int lPMIndex, out double pdblWL, out double pdblIL, out double pdblPDL, out double pdblTapIL, out int plDataCount, ref string errMsg)
         {
-            DeviceHandle.fstpCtrl.GetMeasureResult(deviceGUID, pwmIdxs[lPMIndex]-1, out pdblWL,out pdblIL,out pdblPDL,out pdblTapIL,out plDataCount);
-            DeviceHandle.GetUDLMessage(ref errMsg);
-            if (errMsg.Length > 0)
-                return 1;
-            return 0;
+            lock (DeviceHandle.UdlEngineLock)
+            {
+                DeviceHandle.fstpCtrl.GetMeasureResult(deviceGUID, pwmIdxs[lPMIndex] - 1, out pdblWL, out pdblIL, out pdblPDL, out pdblTapIL, out plDataCount);
+                DeviceHandle.GetUDLMessage(ref errMsg);
+                if (errMsg.Length > 0)
+                    return 1;
+                return 0;
+            }
         }
 
         /// <summary>
@@ -554,11 +565,14 @@ namespace DeviceControl
         /// <returns>0--成功，1--出错</returns>
         public int GetMeasureResultWithTETM(int lPMIndex, out double pdblWL, out double pdblIL, out double pdblPDL, out double pdblTE, out double pdblTM, out double pdblTapIL, out int plDataCount, ref string errMsg)
         {
-            DeviceHandle.fstpCtrl.GetMeasureResultWithTETM(deviceGUID, pwmIdxs[lPMIndex]-1, out pdblWL, out pdblIL, out pdblPDL,out pdblTE, out pdblTM, out pdblTapIL, out plDataCount);
-            DeviceHandle.GetUDLMessage(ref errMsg);
-            if (errMsg.Length > 0)
-                return 1;
-            return 0;
+            lock (DeviceHandle.UdlEngineLock)
+            {
+                DeviceHandle.fstpCtrl.GetMeasureResultWithTETM(deviceGUID, pwmIdxs[lPMIndex] - 1, out pdblWL, out pdblIL, out pdblPDL, out pdblTE, out pdblTM, out pdblTapIL, out plDataCount);
+                DeviceHandle.GetUDLMessage(ref errMsg);
+                if (errMsg.Length > 0)
+                    return 1;
+                return 0;
+            }
         }
     }
 }

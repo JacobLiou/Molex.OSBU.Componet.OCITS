@@ -24,16 +24,19 @@ namespace DeviceControl
         /// <returns>0--成功，1--失败，其他--出错信息</returns>
         public int SetSwitchPosition(int comPort, int outPort, ref string errMsg)
         {
-            if(DeviceHandle.oswCtrl == null)
+            lock (DeviceHandle.UdlEngineLock)
             {
-                errMsg = "switch object is null.";
-                return 1;
+                if (DeviceHandle.oswCtrl == null)
+                {
+                    errMsg = "switch object is null.";
+                    return 1;
+                }
+                DeviceHandle.oswCtrl.SetSwitchPosition(switchGUID, comPort, outPort);
+                DeviceHandle.GetUDLMessage(ref errMsg);
+                if (errMsg.Length > 0)
+                    return 1;
+                return 0;
             }
-            DeviceHandle.oswCtrl.SetSwitchPosition(switchGUID, comPort, outPort);
-            DeviceHandle.GetUDLMessage(ref errMsg);
-            if (errMsg.Length > 0)
-                return 1;
-            return 0;
         }
     }
 }

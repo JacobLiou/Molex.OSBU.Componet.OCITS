@@ -727,9 +727,9 @@ namespace UIOperateInterleaverFinalTest
             {
                 curBakeStatus = BakeStatus.BakeComplete;
                 UIControl.IsClearSNVisiable = Visibility.Visible;
-                TemptRemainTime.Text = state.HasTemp
-                    ? string.Format("烤温完成 {0:F1}°C", state.TempCelsius)
-                    : "烤温完成";
+                SetBakeCountdownDisplay(
+                    "烤温完成",
+                    state.HasTemp ? string.Format("{0:F1}°C", state.TempCelsius) : "");
                 if (!string.IsNullOrEmpty(state.Message))
                     CommonFunction.WriteLog("TCC post-bake complete advisory: " + state.Message);
                 if (state.TempWithinTolerance && !string.IsNullOrEmpty(state.Message))
@@ -744,17 +744,18 @@ namespace UIOperateInterleaverFinalTest
             int timeSec = Math.Max(0, remainMs / 1000);
             string timeShow = string.Format("{0}:{1:D2}:{2:D2}", "00", timeSec / 60, timeSec % 60);
             bool postGate = state != null && state.IsPostGateWait;
-            if (postGate)
-            {
-                if (state.HasTemp)
-                    TemptRemainTime.Text = string.Format("读温对比 {0}  {1:F1}°C", timeShow, state.TempCelsius);
-                else
-                    TemptRemainTime.Text = string.Format("读温对比 {0}", timeShow);
-            }
-            else if (state != null && state.HasTemp)
-                TemptRemainTime.Text = string.Format("{0}  {1:F1}°C", timeShow, state.TempCelsius);
-            else
-                TemptRemainTime.Text = timeShow;
+            string timeLine = postGate ? ("读温对比 " + timeShow) : timeShow;
+            string tempLine = (state != null && state.HasTemp)
+                ? string.Format("{0:F1}°C", state.TempCelsius)
+                : "";
+            SetBakeCountdownDisplay(timeLine, tempLine);
+        }
+
+        /// <summary>烤温区：上行时间/状态，下行温度（避免同一行误读）。</summary>
+        private void SetBakeCountdownDisplay(string timeLine, string tempLine)
+        {
+            TemptRemainTime.Text = string.IsNullOrEmpty(timeLine) ? "00:00:00" : timeLine;
+            TemptRemainTemp.Text = tempLine ?? "";
         }
 
         /// <summary>
@@ -4138,19 +4139,7 @@ namespace UIOperateInterleaverFinalTest
             {
                 CommonFunction.WriteLog(string.Format(
                     "TCC not connected when PrepareChamberAndScan (UI suppressed): {0}", errMsg));
-                if (curTestTmpt.CompareTo(-300) == 0)
-                {
-                    if (scanTmpt > 20 && curTestTmpt < 30)
-                    {
-                        isNeedHeat = false;
-                    }
-                    else
-                        isNeedHeat = true;
-                }
-                else if (curTestTmpt.CompareTo(scanTmpt) != 0)
-                {
-                    isNeedHeat = true;
-                }
+                isNeedHeat = DecideNeedHeatWithoutChamberReading(scanTmpt);
             }
             else
             {
@@ -4159,15 +4148,16 @@ namespace UIOperateInterleaverFinalTest
                 int nTccRes = tccCtrl.GetCurrentTemp(out dTccTemp, ref errMsg);
                 if (nTccRes != 0)
                 {
+                    // 读温失败不阻断：按目标温/已确立温推断是否烤温，继续流程
                     CommonFunction.WriteLog(string.Format(
-                        "TCC GetCurrentTemp fail in PrepareChamberAndScan (UI suppressed): {0}", errMsg));
-                    EndOnekeyOnChamberFail(isOnekey);
-                    return false;
+                        "TCC GetCurrentTemp fail in PrepareChamberAndScan (UI suppressed, continue): {0}", errMsg));
+                    isNeedHeat = DecideNeedHeatWithoutChamberReading(scanTmpt);
                 }
-                RealtimeMsg(string.Format("读取循环箱温度:{0:F3}", dTccTemp));
-                if (Math.Abs(dTccTemp - scanTmpt) > 5)
+                else
                 {
-                    isNeedHeat = true;
+                    RealtimeMsg(string.Format("读取循环箱温度:{0:F3}", dTccTemp));
+                    if (Math.Abs(dTccTemp - scanTmpt) > 5)
+                        isNeedHeat = true;
                 }
             }
             RealtimeMsg(string.Format("是否需要烤温:{0}", isNeedHeat));
@@ -4182,9 +4172,10 @@ namespace UIOperateInterleaverFinalTest
             if (tccCtrl == null)
             {
                 CommonFunction.WriteLog(
-                    "TCC not connected, cannot bake (UI suppressed): please connect chamber.");
-                EndOnekeyOnChamberFail(isOnekey);
-                return false;
+                    "TCC not connected, skip bake and proceed scan (UI suppressed).");
+                curTestTmpt = scanTmpt;
+                DoScanOnBK();
+                return true;
             }
 
             RealtimeMsg(string.Format("开始进行{0}度烤温", scanTmpt));
@@ -4194,16 +4185,34 @@ namespace UIOperateInterleaverFinalTest
             int nSetRes = tccCtrl.SetTempSetpoint(scanTmpt, ref errMsg);
             if (nSetRes != 0)
             {
+                // 设温失败不阻断：跳过烤温倒计时，直接开扫
                 CommonFunction.WriteLog(string.Format(
-                    "TCC SetTempSetpoint fail (UI suppressed): target={0}, {1}", scanTmpt, errMsg));
-                EndOnekeyOnChamberFail(isOnekey);
-                return false;
+                    "TCC SetTempSetpoint fail (UI suppressed, proceed scan): target={0}, {1}",
+                    scanTmpt, errMsg));
+                curTestTmpt = scanTmpt;
+                DoScanOnBK();
+                return true;
             }
             // 先记下目标温与一键标记，再启动烤温线程（供心跳/门禁使用）
             bakeStartedAsOnekey = isOnekey;
             curTestTmpt = scanTmpt;
             bakeTimeCheckBK.RunWorkerAsync(tmptChangeTimes * 60);
             return true;
+        }
+
+        /// <summary>
+        /// 无法读到循环箱实测时：按已确立测试温与目标温推断是否需要烤温（不阻断后续扫描）。
+        /// </summary>
+        private bool DecideNeedHeatWithoutChamberReading(double scanTmpt)
+        {
+            if (curTestTmpt.CompareTo(-300) == 0 || curTestTmpt.CompareTo(-1) == 0)
+            {
+                // 常温目标（约 20~30°C）视为无需烤温，直接扫
+                if (scanTmpt > 20 && scanTmpt < 30)
+                    return false;
+                return true;
+            }
+            return curTestTmpt.CompareTo(scanTmpt) != 0;
         }
 
         /// <summary>
@@ -4454,7 +4463,7 @@ namespace UIOperateInterleaverFinalTest
                 testShowControl.Clear();
                 SetOpenTemplateComplete(false);
                 ClearListData();
-                TemptRemainTime.Text = "00:00:00";
+                SetBakeCountdownDisplay("00:00:00", "");
                 UIControl.SN = "";
             }
         }
@@ -5053,7 +5062,7 @@ namespace UIOperateInterleaverFinalTest
             RealtimeMsg("上传数据完成。");
 
             AllProducts.Clear();
-            TemptRemainTime.Text = "00:00:00";
+            SetBakeCountdownDisplay("00:00:00", "");
             allProductControl.Clear();
             testShowControl.Clear();
             SetOpenTemplateComplete(false);

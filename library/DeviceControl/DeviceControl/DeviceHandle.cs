@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.ComponentModel.Composition;
+using System.Runtime.InteropServices;
+using System.Reflection;
 using MolexUtility;
 using MolexUtility.Device;
 using UDL2_ServerLib;
@@ -14,6 +16,16 @@ namespace DeviceControl
     [PartCreationPolicy(CreationPolicy.Shared)]
     public class DeviceHandle: IDeviceHandle
     {
+        /// <summary>
+        /// 串行化所有 UDL Engine 调用（TCC / FSTP / OSW）。
+        /// 约定：碰 deviceEngine / tccCtrl / fstpCtrl / oswCtrl / GetUDLMessage 前须持有此锁。
+        /// </summary>
+        public static readonly object UdlEngineLock = new object();
+
+        /// <summary>UDL Engine 重连冷却（毫秒），避免硬失败时死循环重开。</summary>
+        private const int UdlReopenCooldownMs = 60000;
+
+        private static int lastUdlReopenTick = unchecked(Environment.TickCount - UdlReopenCooldownMs);
         /// <summary>
         /// 所有配置需要使用的设备的配置信息
         /// </summary>
@@ -84,6 +96,9 @@ namespace DeviceControl
             EnsureDeviceLists();
         }
 
+        /// <summary>
+        /// 读取 UDL LastError。调用方应已持有 <see cref="UdlEngineLock"/>（或处于单线程初始化）。
+        /// </summary>
         public static bool GetUDLMessage(ref string msg)
         {
             try
@@ -91,6 +106,12 @@ namespace DeviceControl
                 string result = "";
                 sbyte[] sbMsg = new sbyte[1024];
                 byte[] bMsg = new byte[1024];
+
+                if (deviceEngine == null)
+                {
+                    msg = "UDL Engine is null.";
+                    return false;
+                }
 
                 deviceEngine.GetLastErrorMessage(out sbMsg[0], 1024);
                 for (int i = 0; i < 1024; i++)
@@ -561,6 +582,190 @@ namespace DeviceControl
                 errMsg += "InitTccOnly error:" + ex.Message + "\r";
                 report("异常: " + ex.Message);
                 return 1;
+            }
+        }
+
+        /// <summary>
+        /// 冷却期内是否允许再开 UDL Engine。调用方应已持有 <see cref="UdlEngineLock"/>。
+        /// </summary>
+        public static bool CanTryReopenUdlEngine()
+        {
+            return unchecked(Environment.TickCount - lastUdlReopenTick) >= UdlReopenCooldownMs;
+        }
+
+        /// <summary>
+        /// 关闭并重建 UDL Engine（TCC/FSTP/OSW），刷新 udlTccs/udlFstps/udlSwitchs 包装。
+        /// 不清空光开关等非 UDL 设备。必须在已持有 <see cref="UdlEngineLock"/> 时调用。
+        /// </summary>
+        /// <returns>true 表示重连成功</returns>
+        public static bool TryReopenUdlEngine(ref string errMsg)
+        {
+            errMsg = errMsg ?? "";
+            if (!CanTryReopenUdlEngine())
+            {
+                errMsg = "UDL reopen skipped (cooldown).";
+                CommonFunction.WriteLog("[UdlReopen] skipped: cooldown " + UdlReopenCooldownMs + "ms");
+                return false;
+            }
+
+            lastUdlReopenTick = Environment.TickCount;
+            CommonFunction.WriteLog("[UdlReopen] begin Close+Open UDL Engine");
+
+            try
+            {
+                if (UdlRuntimeConfig.IsUdlEngineLoadDisabled())
+                {
+                    errMsg = "UDL engine load disabled.";
+                    CommonFunction.WriteLog("[UdlReopen] fail: " + errMsg);
+                    return false;
+                }
+
+                string udlConfigPath = Path.Combine(Environment.CurrentDirectory, "set", "UDLConfig.xml");
+                if (!File.Exists(udlConfigPath))
+                {
+                    errMsg = "UDLConfig.xml not found: " + udlConfigPath;
+                    CommonFunction.WriteLog("[UdlReopen] fail: " + errMsg);
+                    return false;
+                }
+
+                TryCloseUdlComObjects();
+
+                deviceEngine = new UDL2_Engine();
+                tccCtrl = new UDL2_TCC();
+                fstpCtrl = new UDL2_FSTP();
+                oswCtrl = new UDL2_OSW();
+                CommonFunction.WriteLog("[UdlReopen] COM objects recreated");
+
+                string udlLog = Path.Combine(Environment.CurrentDirectory, "UDLlog.txt");
+                deviceEngine.SetDebugLogFile(udlLog);
+                deviceEngine.LoadConfiguration(udlConfigPath);
+                string loadErr = "";
+                if (!GetUDLMessage(ref loadErr))
+                {
+                    errMsg = "LoadConfiguration failed: " + loadErr;
+                    CommonFunction.WriteLog("[UdlReopen] fail: " + errMsg);
+                    return false;
+                }
+
+                deviceEngine.OpenEngine();
+                string openErr = "";
+                if (!GetUDLMessage(ref openErr))
+                {
+                    errMsg = "OpenEngine failed: " + openErr;
+                    CommonFunction.WriteLog("[UdlReopen] fail: " + errMsg);
+                    return false;
+                }
+                CommonFunction.WriteLog("[UdlReopen] OpenEngine OK");
+
+                RefreshUdlDeviceWrappers(ref errMsg);
+                CommonFunction.WriteLog("[UdlReopen] success");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                errMsg = "TryReopenUdlEngine exception: " + ex.Message;
+                CommonFunction.WriteLog("[UdlReopen] exception: " + ex);
+                return false;
+            }
+        }
+
+        private static void TryCloseUdlComObjects()
+        {
+            try
+            {
+                if (deviceEngine != null)
+                {
+                    MethodInfo close = deviceEngine.GetType().GetMethod("CloseEngine",
+                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+                    if (close != null)
+                    {
+                        close.Invoke(deviceEngine, null);
+                        CommonFunction.WriteLog("[UdlReopen] CloseEngine invoked");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                CommonFunction.WriteLog("[UdlReopen] CloseEngine ignored: " + ex.Message);
+            }
+
+            ReleaseComQuiet(ref oswCtrl);
+            ReleaseComQuiet(ref fstpCtrl);
+            ReleaseComQuiet(ref tccCtrl);
+            ReleaseComQuiet(ref deviceEngine);
+        }
+
+        private static void ReleaseComQuiet<T>(ref T comObj) where T : class
+        {
+            if (comObj == null)
+                return;
+            try
+            {
+                int refs;
+                do
+                {
+                    refs = Marshal.ReleaseComObject(comObj);
+                } while (refs > 0);
+            }
+            catch (Exception ex)
+            {
+                CommonFunction.WriteLog("[UdlReopen] ReleaseComObject: " + ex.Message);
+            }
+            comObj = null;
+        }
+
+        /// <summary>
+        /// 按 Deviceconfig 重建 UDL 包装列表（保留 GUID / FSTP PM 索引）。
+        /// </summary>
+        private static void RefreshUdlDeviceWrappers(ref string errMsg)
+        {
+            EnsureDeviceLists();
+            if (udlTccs != null) udlTccs.Clear();
+            if (udlFstps != null) udlFstps.Clear();
+            if (udlSwitchs != null) udlSwitchs.Clear();
+
+            string deviceConfigPath = Path.Combine(Environment.CurrentDirectory, "set", "Deviceconfig.xml");
+            List<string> useNameList;
+            List<List<DeviceConfig>> configs;
+            ConfigXmlParser.ParseConfig(deviceConfigPath, out useNameList, out configs);
+            if (configs == null)
+            {
+                errMsg = (errMsg ?? "") + " Deviceconfig parse empty after reopen.";
+                CommonFunction.WriteLog("[UdlReopen] " + errMsg);
+                return;
+            }
+
+            foreach (List<DeviceConfig> group in configs)
+            {
+                if (group == null)
+                    continue;
+                foreach (DeviceConfig config in group)
+                {
+                    if (config.ControlName == Devices.UDLTCC.GetAdditional())
+                    {
+                        UDLTccCtrl tccObj = new UDLTccCtrl();
+                        tccObj.deviceGUID = Convert.ToInt32(config.Control[0]);
+                        udlTccs.Add(tccObj);
+                        CommonFunction.WriteLog(string.Format(
+                            "[UdlReopen] re-register UDLTCC GUID={0}", tccObj.deviceGUID));
+                    }
+                    else if (config.ControlName == Devices.UDLFSTP.GetAdditional())
+                    {
+                        UDLFSTPScan scanObj = new UDLFSTPScan();
+                        scanObj.InitFSTP(Convert.ToInt32(config.Control[0]), config.Control[1]);
+                        udlFstps.Add(scanObj);
+                        CommonFunction.WriteLog(string.Format(
+                            "[UdlReopen] re-register UDLFSTP GUID={0}", scanObj.deviceGUID));
+                    }
+                    else if (config.ControlName == Devices.UDLSwitch.GetAdditional())
+                    {
+                        UDLSwitch swObj = new UDLSwitch();
+                        swObj.switchGUID = Convert.ToInt32(config.Control[0]);
+                        udlSwitchs.Add(swObj);
+                        CommonFunction.WriteLog(string.Format(
+                            "[UdlReopen] re-register UDLSwitch GUID={0}", swObj.switchGUID));
+                    }
+                }
             }
         }
 

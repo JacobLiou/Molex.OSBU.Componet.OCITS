@@ -519,9 +519,10 @@ namespace OCITestSystem
             }
             catch (Exception ex)
             {
-                WriteComposeLog("[Compose] Exception: " + ex);
-                CommonFunction.WriteLog("[Compose] " + ex);
-                MessageBox.Show(ex.Message);
+                string detail = FormatExceptionDetail(ex, 0);
+                WriteComposeLog("[Compose] Exception: " + detail);
+                CommonFunction.WriteLog("[Compose] " + detail);
+                MessageBox.Show(detail.Length > 4000 ? detail.Substring(0, 4000) + "\r\n...(详见 Log\\compose.log)" : detail);
             }
         }
 
@@ -535,10 +536,53 @@ namespace OCITestSystem
                 {
                     sb.AppendLine(err.Description);
                     if (err.Exception != null)
-                        sb.AppendLine(err.Exception.Message);
+                        sb.Append(FormatExceptionDetail(err.Exception, 1));
                 }
             }
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// 展开异常树（含 ReflectionTypeLoadException.LoaderExceptions），用于定位缺失依赖。
+        /// </summary>
+        private static string FormatExceptionDetail(Exception ex, int indent)
+        {
+            var sb = new StringBuilder();
+            AppendExceptionDetail(sb, ex, indent, 0);
+            return sb.ToString();
+        }
+
+        private static void AppendExceptionDetail(StringBuilder sb, Exception ex, int indent, int depth)
+        {
+            if (ex == null || depth > 6)
+                return;
+            string pad = new string(' ', indent * 2);
+            sb.AppendLine(pad + ex.GetType().Name + ": " + ex.Message);
+
+            ReflectionTypeLoadException rtle = ex as ReflectionTypeLoadException;
+            if (rtle != null && rtle.LoaderExceptions != null)
+            {
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (Exception le in rtle.LoaderExceptions)
+                {
+                    if (le == null || string.IsNullOrEmpty(le.Message) || !seen.Add(le.Message))
+                        continue;
+                    sb.AppendLine(pad + "  [LoaderException] " + le.Message);
+                }
+            }
+
+            CompositionException ce = ex as CompositionException;
+            if (ce != null && ce.Errors != null)
+            {
+                foreach (CompositionError err in ce.Errors)
+                {
+                    if (err.Exception == null || err.Exception == ex)
+                        continue;
+                    AppendExceptionDetail(sb, err.Exception, indent + 1, depth + 1);
+                }
+            }
+
+            AppendExceptionDetail(sb, ex.InnerException, indent, depth + 1);
         }
 
         private string GetExeDir()
@@ -675,7 +719,10 @@ namespace OCITestSystem
             }
             catch (Exception ex)
             {
-                MessageBox.Show(ex.Message);
+                string detail = FormatExceptionDetail(ex, 0);
+                WriteComposeLog("[Window_Loaded] Exception: " + detail);
+                CommonFunction.WriteLog("[Window_Loaded] " + detail);
+                MessageBox.Show(detail.Length > 4000 ? detail.Substring(0, 4000) + "\r\n...(详见 Log\\compose.log)" : detail);
             }
         }
 
