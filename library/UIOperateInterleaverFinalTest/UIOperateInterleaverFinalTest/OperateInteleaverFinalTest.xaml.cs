@@ -698,17 +698,16 @@ namespace UIOperateInterleaverFinalTest
                 hasFirstHbTemp, firstHbTemp,
                 hasHbTemp, lastHbTemp,
                 out gateTemp, out advisoryMsg);
-            if (!proceed)
-                return;
 
-            bool withinTol = !double.IsNaN(gateTemp)
+            bool withinTol = proceed
+                && !double.IsNaN(gateTemp)
                 && Math.Abs(gateTemp - targetTmpt) <= TccBakeReadyToleranceCelsius;
             curBakeStatus = BakeStatus.BakeComplete;
             bakeTimeCheckBK.ReportProgress(0, new BakeProgressState
             {
                 RemainingMs = 0,
                 Complete = true,
-                GateOk = true,
+                GateOk = proceed,
                 TempWithinTolerance = withinTol,
                 HasTemp = !double.IsNaN(gateTemp),
                 TempCelsius = double.IsNaN(gateTemp) ? 0 : gateTemp,
@@ -727,16 +726,36 @@ namespace UIOperateInterleaverFinalTest
             {
                 curBakeStatus = BakeStatus.BakeComplete;
                 UIControl.IsClearSNVisiable = Visibility.Visible;
-                SetBakeCountdownDisplay(
-                    "烤温完成",
-                    state.HasTemp ? string.Format("{0:F1}°C", state.TempCelsius) : "");
-                if (!string.IsNullOrEmpty(state.Message))
-                    CommonFunction.WriteLog("TCC post-bake complete advisory: " + state.Message);
-                if (state.TempWithinTolerance && !string.IsNullOrEmpty(state.Message))
-                    RealtimeMsg(state.Message);
+                if (state.GateOk)
+                {
+                    SetBakeCountdownDisplay(
+                        "烤温完成",
+                        state.HasTemp ? string.Format("{0:F1}°C", state.TempCelsius) : "");
+                    if (!string.IsNullOrEmpty(state.Message))
+                        CommonFunction.WriteLog("TCC post-bake complete advisory: " + state.Message);
+                    if (!string.IsNullOrEmpty(state.Message))
+                        RealtimeMsg(state.Message);
+                    else
+                        RealtimeMsg("烤温计时结束，开始扫描。");
+                    DoScanOnBK();
+                }
                 else
-                    RealtimeMsg("烤温计时结束，开始扫描。");
-                DoScanOnBK();
+                {
+                    SetBakeCountdownDisplay(
+                        "烤温未通过",
+                        state.HasTemp ? string.Format("{0:F1}°C", state.TempCelsius) : "");
+                    string failMsg = string.IsNullOrEmpty(state.Message)
+                        ? "烤温门禁未通过，已停止扫描。"
+                        : state.Message;
+                    bool cancelled = failMsg.IndexOf("取消", StringComparison.Ordinal) >= 0;
+                    RealtimeMsg(failMsg, cancelled ? StatusType.Warning : StatusType.Error);
+                    if (!cancelled)
+                        ErrorBox(failMsg);
+                    EndOnekeyOnChamberFail(bakeStartedAsOnekey);
+                    UIControl.IsScanEnable = true;
+                    UIControl.IsSaveEnable = true;
+                    UIControl.IsReferenceEnable = true;
+                }
                 return;
             }
 
@@ -782,9 +801,9 @@ namespace UIOperateInterleaverFinalTest
         }
 
         /// <summary>
-        /// 烤温满时长后尽力读温对比；未到温或读失败仅告警。除取消外一律允许开扫。
+        /// 烤温满时长后读温对比：到温（±容差）才允许开扫；未到温或全程读失败则硬阻断。
         /// </summary>
-        /// <returns>false 仅表示烤温已取消；true 表示应继续开扫</returns>
+        /// <returns>true 表示到温可开扫；false 表示取消或门禁未通过</returns>
         private bool EvaluateChamberAfterBake(
             double targetTmpt,
             bool hasFirstHbTemp, double firstHbTemp,
@@ -866,7 +885,7 @@ namespace UIOperateInterleaverFinalTest
             if (!double.IsNaN(lastTemp))
             {
                 advisoryMsg = string.Format(
-                    "烤温结束未到温（目标 {0:F1}°C，实测 {1:F1}°C，允许 ±{2:F1}°C），仍开扫。",
+                    "烤温结束未到温（目标 {0:F1}°C，实测 {1:F1}°C，允许 ±{2:F1}°C），已停止扫描。",
                     targetTmpt, lastTemp, TccBakeReadyToleranceCelsius);
             }
             else
@@ -874,8 +893,8 @@ namespace UIOperateInterleaverFinalTest
                 advisoryMsg = BuildPostBakeTrendAdvisory(
                     targetTmpt, hasFirstHbTemp, firstHbTemp, hasLastHbTemp, lastHbTemp);
             }
-            CommonFunction.WriteLog("TCC post-bake proceed anyway: " + advisoryMsg);
-            return true;
+            CommonFunction.WriteLog("TCC post-bake gate blocked: " + advisoryMsg);
+            return false;
         }
 
         private static string BuildPostBakeTrendAdvisory(
@@ -890,21 +909,21 @@ namespace UIOperateInterleaverFinalTest
                 if (heatingToward || coolingToward)
                 {
                     return string.Format(
-                        "烤温结束读温失败，按升降温趋势（{0:F1}→{1:F1}°C，目标 {2:F1}°C）判定可开扫。",
+                        "烤温结束读温失败，心跳呈向目标趋势（{0:F1}→{1:F1}°C，目标 {2:F1}°C），仍无法确认到温，已停止扫描。",
                         firstHbTemp, lastHbTemp, targetTmpt);
                 }
                 return string.Format(
-                    "烤温结束读温失败，心跳温度 {0:F1}→{1:F1}°C（目标 {2:F1}°C），按烤温时长满仍开扫。",
+                    "烤温结束读温失败，心跳温度 {0:F1}→{1:F1}°C（目标 {2:F1}°C），无法确认到温，已停止扫描。",
                     firstHbTemp, lastHbTemp, targetTmpt);
             }
             if (hasLastHbTemp)
             {
                 return string.Format(
-                    "烤温结束读温失败，末次心跳 {0:F1}°C（目标 {1:F1}°C），按烤温时长满仍开扫。",
+                    "烤温结束读温失败，末次心跳 {0:F1}°C（目标 {1:F1}°C），无法确认到温，已停止扫描。",
                     lastHbTemp, targetTmpt);
             }
             return string.Format(
-                "烤温结束读温失败，目标 {0:F1}°C，按烤温时长满仍开扫。", targetTmpt);
+                "烤温结束读温失败，目标 {0:F1}°C，无法确认到温，已停止扫描。", targetTmpt);
         }
 
         private sealed class BakeProgressState
@@ -4113,7 +4132,45 @@ namespace UIOperateInterleaverFinalTest
         }
 
         /// <summary>
-        /// 判断是否需要烤温：需要则设温并启动烤温倒计时（倒计时结束后扫描），否则直接扫描。
+        /// 三温测完（常为高温）或单项结束设回常温，利用回温时间做上传/开下一批模板。
+        /// 失败只告警，不阻断上传与 UI。
+        /// </summary>
+        private void RequestChamberReturnToRoomTemp()
+        {
+            string errMsg = "";
+            IUDLTCC tccCtrl = null;
+            if (DeviceControl == null)
+            {
+                RealtimeMsg("循环箱回常温跳过：设备控制未初始化。", StatusType.Warning);
+                return;
+            }
+            DeviceControl.GetUDLTCCByGUID(TCC_GUID, ref tccCtrl, ref errMsg);
+            if (tccCtrl == null)
+            {
+                RealtimeMsg("循环箱回常温跳过：未配置或未连接。", StatusType.Warning);
+                return;
+            }
+
+            const double roomSetpoint = 25;
+            errMsg = "";
+            int res = tccCtrl.SetTempSetpoint(roomSetpoint, ref errMsg);
+            if (res == 0)
+            {
+                RealtimeMsg(string.Format(
+                    "测试结束，循环箱已设定回常温 {0:F0}°C，可利用回温时间准备下一批。", roomSetpoint));
+                CommonFunction.WriteLog(string.Format(
+                    "TCC return to room setpoint {0:F0}°C OK", roomSetpoint));
+            }
+            else
+            {
+                RealtimeMsg(string.Format("循环箱回常温失败:{0}", errMsg), StatusType.Error);
+                CommonFunction.WriteLog("TCC return to room fail: " + errMsg);
+            }
+        }
+
+        /// <summary>
+        /// 判断是否需要烤温：需要则设温并启动烤温倒计时（倒计时结束后硬门禁再扫），否则直接扫描。
+        /// 无箱/设温失败停扫；读温失败则仍下发目标温并烤温，由烤后门禁判定。
         /// </summary>
         private bool PrepareChamberAndScan(double scanTmpt, double tmptChangeTimes, bool isOnekey)
         {
@@ -4138,7 +4195,7 @@ namespace UIOperateInterleaverFinalTest
             if (tccCtrl == null)
             {
                 CommonFunction.WriteLog(string.Format(
-                    "TCC not connected when PrepareChamberAndScan (UI suppressed): {0}", errMsg));
+                    "TCC not connected when PrepareChamberAndScan: {0}", errMsg));
                 isNeedHeat = DecideNeedHeatWithoutChamberReading(scanTmpt);
             }
             else
@@ -4148,9 +4205,9 @@ namespace UIOperateInterleaverFinalTest
                 int nTccRes = tccCtrl.GetCurrentTemp(out dTccTemp, ref errMsg);
                 if (nTccRes != 0)
                 {
-                    // 读温失败不阻断：按目标温/已确立温推断是否烤温，继续流程
+                    // 读温失败：仍按目标温推断烤温需求，下发设温后由烤后门禁硬判定
                     CommonFunction.WriteLog(string.Format(
-                        "TCC GetCurrentTemp fail in PrepareChamberAndScan (UI suppressed, continue): {0}", errMsg));
+                        "TCC GetCurrentTemp fail in PrepareChamberAndScan (force bake path if needed): {0}", errMsg));
                     isNeedHeat = DecideNeedHeatWithoutChamberReading(scanTmpt);
                 }
                 else
@@ -4171,27 +4228,35 @@ namespace UIOperateInterleaverFinalTest
 
             if (tccCtrl == null)
             {
-                CommonFunction.WriteLog(
-                    "TCC not connected, skip bake and proceed scan (UI suppressed).");
-                curTestTmpt = scanTmpt;
-                DoScanOnBK();
-                return true;
+                string failMsg = string.Format(
+                    "循环箱未连接，无法烤温至 {0:F1}°C，已停止扫描。", scanTmpt);
+                CommonFunction.WriteLog("TCC not connected, bake required — block scan: " + failMsg);
+                RealtimeMsg(failMsg, StatusType.Error);
+                ErrorBox(failMsg);
+                EndOnekeyOnChamberFail(isOnekey);
+                UIControl.IsScanEnable = true;
+                UIControl.IsSaveEnable = true;
+                UIControl.IsReferenceEnable = true;
+                return false;
             }
 
             RealtimeMsg(string.Format("开始进行{0}度烤温", scanTmpt));
             CommonFunction.WriteLog(string.Format(
-                "TCC bake start target={0:F1}°C (post-bake compare ±{1:F0}°C, never block scan)",
+                "TCC bake start target={0:F1}°C (post-bake hard gate ±{1:F0}°C)",
                 scanTmpt, TccBakeReadyToleranceCelsius));
             int nSetRes = tccCtrl.SetTempSetpoint(scanTmpt, ref errMsg);
             if (nSetRes != 0)
             {
-                // 设温失败不阻断：跳过烤温倒计时，直接开扫
-                CommonFunction.WriteLog(string.Format(
-                    "TCC SetTempSetpoint fail (UI suppressed, proceed scan): target={0}, {1}",
-                    scanTmpt, errMsg));
-                curTestTmpt = scanTmpt;
-                DoScanOnBK();
-                return true;
+                string failMsg = string.Format(
+                    "循环箱设温失败（目标 {0:F1}°C）:{1}", scanTmpt, errMsg);
+                CommonFunction.WriteLog("TCC SetTempSetpoint fail — block scan: " + failMsg);
+                RealtimeMsg(failMsg, StatusType.Error);
+                ErrorBox(failMsg);
+                EndOnekeyOnChamberFail(isOnekey);
+                UIControl.IsScanEnable = true;
+                UIControl.IsSaveEnable = true;
+                UIControl.IsReferenceEnable = true;
+                return false;
             }
             // 先记下目标温与一键标记，再启动烤温线程（供心跳/门禁使用）
             bakeStartedAsOnekey = isOnekey;
@@ -4338,14 +4403,17 @@ namespace UIOperateInterleaverFinalTest
                     if (TryAbortBatchForRoomTempIl())
                     {
                         singleScanSameTmptActive = false;
+                        RequestChamberReturnToRoomTemp();
                         return;
                     }
                     if (ContinueSingleScanSameTemperature())
                         return;
+                    RequestChamberReturnToRoomTemp();
                 }
                 else
                 {
                     singleScanSameTmptActive = false;
+                    RequestChamberReturnToRoomTemp();
                 }
                 UIControl.IsScanEnable = true;
                 UIControl.IsSaveEnable = true;              
@@ -4542,6 +4610,8 @@ namespace UIOperateInterleaverFinalTest
 
             if (i == portAssistant.Count)
             {
+                // 先下发回常温，再弹窗，避免等确认才开始回温
+                RequestChamberReturnToRoomTemp();
                 MessageBox.Show("一键测试完成！");
                 UIControl.IsScanEnable = true;
                 UIControl.IsSaveEnable = true;
@@ -5074,13 +5144,8 @@ namespace UIOperateInterleaverFinalTest
             ShowTmpltPath();
             savePathList.Clear();
 
-            string tccErrMsg = "";
-            IUDLTCC tccCtrl = null;
-            DeviceControl.GetUDLTCCByGUID(TCC_GUID, ref tccCtrl, ref tccErrMsg);
-            if (tccCtrl != null)
-            {
-                tccCtrl.SetTempSetpoint(25, ref tccErrMsg);
-            }
+            // 一键结束时通常已回常温；上传后再设一次，保证流程闭环
+            RequestChamberReturnToRoomTemp();
         }
 
         private void UserControl_PreviewKeyDown(object sender, KeyEventArgs e)
